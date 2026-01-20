@@ -64,11 +64,27 @@ def geojson_to_gdf(geojson_data, highways_df=None, filter_targets=False):
     if filter_targets and highways_df is not None:
         target_highways_set = set(highways_df['highway'].astype(str))
         
+        # QEW pattern matching - MUST be checked before standard matching
+        # because QEW segments have HWY_NUM=1 which could match other highways
+        qew_patterns = ["QEW", "Queen Elizabeth", "Elizabeth Way"]
+        qew_regex = re.compile("|".join(qew_patterns), re.IGNORECASE)
+        
         gdf['matched_highway'] = None
+        
         for idx, row in gdf.iterrows():
             road_name = row.get('RDNAME', '')
             hwy_num = row.get('HWY_NUM')
             
+            # ALWAYS check for QEW patterns in RDNAME first, regardless of target set
+            # If found AND QEW is in our targets, assign it as QEW
+            if road_name and qew_regex.search(str(road_name)):
+                if 'QEW' in target_highways_set:
+                    gdf.at[idx, 'matched_highway'] = 'QEW'
+                    continue
+                # If QEW pattern found but QEW not in targets, skip to avoid mismatching
+                continue
+            
+            # Then check standard highway matching for non-QEW roads
             normalized_name = normalize_highway_name(road_name)
             normalized_hwy = normalize_highway_name(str(hwy_num)) if hwy_num else None
             
