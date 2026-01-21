@@ -61,8 +61,16 @@ def extract_gta_numbered_highways(
     gdf_roads = gpd.read_file(highways_geojson)
     gdf_gta = gpd.read_file(gta_boundary_geojson)
 
-    # Align CRS
-    gdf_gta = _ensure_crs(gdf_gta, gdf_roads.crs)
+    # Align CRS with explicit logging
+    print(f"\n[GTA Highway Extraction] CRS Alignment:")
+    print(f"  Roads CRS: {gdf_roads.crs}")
+    print(f"  GTA Boundary CRS: {gdf_gta.crs}")
+    
+    if gdf_roads.crs != gdf_gta.crs:
+        print(f"  → Reprojecting GTA boundary to {gdf_roads.crs}")
+        gdf_gta = gdf_gta.to_crs(gdf_roads.crs)
+    else:
+        print(f"  ✓ CRS already aligned")
 
     # Clip to GTA extent
     gdf_gta_union = gdf_gta.unary_union
@@ -108,6 +116,7 @@ def cities_to_geojson(
 
     geometry = [Point(lon, lat) for lon, lat in zip(df_clean["Longitude"], df_clean["Latitude"])]
     gdf = gpd.GeoDataFrame(df_clean, geometry=geometry, crs="EPSG:4326")
+    print(f"\n[Cities to GeoJSON] Created {len(gdf)} city points with CRS: {gdf.crs}")
 
     _save_geojson(gdf, output_path)
     return gdf
@@ -135,7 +144,9 @@ def fsas_to_geojson(
     target_fsas = df["FSA"].dropna().astype(str).str.upper().str[:3].unique()
 
     gdf_fsa = load_fsa_shapefile(fsa_shapefile)
+    print(f"\n[FSAs to GeoJSON] FSA Shapefile CRS: {gdf_fsa.crs}")
     gdf_filtered = gdf_fsa[gdf_fsa["CFSAUID"].str[:3].str.upper().isin(target_fsas)].copy()
+    print(f"  Filtered to {len(gdf_filtered)} FSAs with CRS: {gdf_filtered.crs}")
 
     _save_geojson(gdf_filtered, output_path)
     return gdf_filtered

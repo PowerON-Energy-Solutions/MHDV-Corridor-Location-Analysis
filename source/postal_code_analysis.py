@@ -94,7 +94,7 @@ def filter_fsa_by_postal_codes(gdf_fsa, df_postal, gdf_boundary):
         Filtered and reprojected GeoDataFrame
     """
     # Check and align coordinate systems
-    print(f"\nCoordinate Systems:")
+    print(f"\n[FSA Filter] Coordinate Systems:")
     print(f"  FSA shapefile CRS: {gdf_fsa.crs}")
     print(f"  Ontario boundary CRS: {gdf_boundary.crs}")
     
@@ -102,6 +102,8 @@ def filter_fsa_by_postal_codes(gdf_fsa, df_postal, gdf_boundary):
     if gdf_fsa.crs != gdf_boundary.crs:
         print(f"  → Reprojecting FSA shapefile to {gdf_boundary.crs}")
         gdf_fsa = gdf_fsa.to_crs(gdf_boundary.crs)
+    else:
+        print(f"  ✓ CRS already aligned")
     
     target_fsas = df_postal['FSA'].unique()
     
