@@ -13,6 +13,14 @@ import numpy as np
 from matplotlib.colors import hsv_to_rgb
 from pathlib import Path
 
+__all__ = [
+    'load_fsa_shapefile',
+    'load_postal_codes',
+    'load_ontario_boundary',
+    'filter_fsa_by_postal_codes',
+    'visualize_fsas'
+]
+
 
 def load_fsa_shapefile(shapefile_path):
     """
