@@ -5,6 +5,7 @@ Functions here:
 1) Extract numbered highway segments within the GTA boundary and save to GeoJSON.
 2) Convert public charging cities (CSV) to a point GeoJSON.
 3) Filter FSA boundaries for the public charging FSAs list and save to GeoJSON.
+4) Convert refueling stops (CSV) to a point GeoJSON.
 
 Outputs are written alongside the input data (by default into the data/ folder).
 """
@@ -152,6 +153,37 @@ def fsas_to_geojson(
     return gdf_filtered
 
 
+# ---------- 4) Refueling stops ----------
+
+def refueling_stops_to_geojson(
+    refueling_csv: Path = DATA_DIR / "refueling_stops.csv",
+    output_path: Path = DATA_DIR / "refueling_stops.geojson",
+) -> gpd.GeoDataFrame:
+    """Convert refueling stop locations (CSV) to a GeoJSON of points."""
+
+    if not refueling_csv.exists():
+        raise FileNotFoundError(f"Refueling stops CSV not found: {refueling_csv}")
+
+    df = pd.read_csv(refueling_csv)
+    required_cols = {"City", "Latitude", "Longitude"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(f"Refueling stops CSV missing columns: {sorted(missing)}")
+
+    df_clean = df.dropna(subset=["Latitude", "Longitude"]).copy()
+    df_clean["Longitude"] = pd.to_numeric(df_clean["Longitude"], errors="coerce")
+    df_clean["Latitude"] = pd.to_numeric(df_clean["Latitude"], errors="coerce")
+    df_clean["Count"] = pd.to_numeric(df_clean.get("Count"), errors="coerce")
+    df_clean = df_clean.dropna(subset=["Latitude", "Longitude"])
+
+    geometry = [Point(lon, lat) for lon, lat in zip(df_clean["Longitude"], df_clean["Latitude"])]
+    gdf = gpd.GeoDataFrame(df_clean, geometry=geometry, crs="EPSG:4326")
+    print(f"\n[Refueling Stops to GeoJSON] Created {len(gdf)} stop points with CRS: {gdf.crs}")
+
+    _save_geojson(gdf, output_path)
+    return gdf
+
+
 # ---------- Orchestration ----------
 
 def run_all(
@@ -160,12 +192,15 @@ def run_all(
     cities_csv: Path = DATA_DIR / "public_charging_cities.csv",
     fsas_csv: Path = DATA_DIR / "public_charging_fsas.csv",
     fsa_shapefile: Path = DATA_DIR / "lfsa000b21a_e" / "lfsa000b21a_e.shp",
+    refueling_csv: Path = DATA_DIR / "refueling_stops.csv",
 ) -> Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """Run all three extraction tasks and return GeoDataFrames."""
 
     gdf_highways = extract_gta_numbered_highways(highways_geojson, gta_boundary_geojson)
     gdf_cities = cities_to_geojson(cities_csv)
     gdf_fsas = fsas_to_geojson(fsas_csv, fsa_shapefile)
+    # Also export refueling stops for completeness; return signature remains unchanged
+    refueling_stops_to_geojson(refueling_csv)
     return gdf_highways, gdf_cities, gdf_fsas
 
 
@@ -174,5 +209,6 @@ if __name__ == "__main__":
     print(
         f"Saved outputs to: {DATA_DIR / 'gta_numbered_highways.geojson'}, "
         f"{DATA_DIR / 'public_charging_cities.geojson'}, "
-        f"{DATA_DIR / 'public_charging_fsas.geojson'}"
+        f"{DATA_DIR / 'public_charging_fsas.geojson'}, "
+        f"{DATA_DIR / 'refueling_stops.geojson'}"
     )

@@ -18,6 +18,7 @@ __all__ = [
     'load_postal_codes',
     'load_ontario_boundary',
     'filter_fsa_by_postal_codes',
+    'save_target_fsa_geojson',
     'visualize_fsas'
 ]
 
@@ -113,6 +114,22 @@ def filter_fsa_by_postal_codes(gdf_fsa, df_postal, gdf_boundary):
     print(f"Filtered to {len(gdf_filtered)} FSA features matching target postal codes")
     
     return gdf_filtered
+
+
+def save_target_fsa_geojson(gdf_fsa_target, output_path: Path) -> Path:
+    """Persist the filtered target FSAs to GeoJSON.
+
+    Args:
+        gdf_fsa_target: GeoDataFrame containing target FSAs.
+        output_path: Destination path for the GeoJSON.
+
+    Returns:
+        The path that was written to.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    gdf_fsa_target.to_file(output_path, driver="GeoJSON")
+    print(f"[FSA Export] Saved {len(gdf_fsa_target)} target FSAs to {output_path}")
+    return output_path
 
 
 def visualize_fsas(gdf_fsa, gdf_boundary, output_path=None, label_directions=None):
@@ -328,6 +345,10 @@ def main():
     # Filter FSAs
     print("\n4. Filtering FSAs to match target postal codes...")
     gdf_fsa_target = filter_fsa_by_postal_codes(gdf_fsa_all, df_postal, gdf_boundary)
+
+    # Persist filtered FSAs for downstream use
+    target_fsa_geojson = data_dir / 'target_fsas.geojson'
+    save_target_fsa_geojson(gdf_fsa_target, target_fsa_geojson)
     
     # Display statistics
     print("\n" + "=" * 70)
