@@ -16,9 +16,12 @@ from pathlib import Path
 __all__ = [
     'load_fsa_shapefile',
     'load_postal_codes',
+    'load_pembina_fsas',
     'load_ontario_boundary',
     'filter_fsa_by_postal_codes',
     'save_target_fsa_geojson',
+    'save_pembina_fsa_geojson',
+    'attach_region_to_fsas',
     'visualize_fsas'
 ]
 
@@ -63,6 +66,26 @@ def load_postal_codes(csv_path):
     print(f"Extracted {df['FSA'].nunique()} unique FSAs")
     print(f"FSAs: {sorted(df['FSA'].unique())}")
     
+    return df
+
+
+def load_pembina_fsas(csv_path):
+    """
+    Load Pembina corridor FSAs and normalize casing.
+    """
+    df = pd.read_csv(csv_path)
+    print(f"Loaded {len(df)} records from Pembina FSAs CSV")
+    expected_cols = {'Region', 'FSA'}
+    missing_cols = expected_cols.difference(df.columns)
+    if missing_cols:
+        raise ValueError(f"Pembina FSA CSV missing columns: {missing_cols}")
+
+    df['FSA'] = df['FSA'].astype(str).str.upper().str.strip().str[:3]
+    df['Region'] = df['Region'].astype(str).str.strip()
+
+    print(f"Unique FSAs: {df['FSA'].nunique()} | Regions: {df['Region'].nunique()}")
+    print(f"FSAs: {sorted(df['FSA'].unique())}")
+
     return df
 
 
@@ -129,6 +152,31 @@ def save_target_fsa_geojson(gdf_fsa_target, output_path: Path) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     gdf_fsa_target.to_file(output_path, driver="GeoJSON")
     print(f"[FSA Export] Saved {len(gdf_fsa_target)} target FSAs to {output_path}")
+    return output_path
+
+
+def attach_region_to_fsas(gdf_fsa, df_regions):
+    """Attach region metadata to FSA geometries using the 3-character FSA code."""
+    gdf_with_region = gdf_fsa.copy()
+    fsa_prefix = gdf_with_region['CFSAUID'].str[:3].str.upper()
+    region_lookup = df_regions.set_index('FSA')['Region']
+    gdf_with_region['Region'] = fsa_prefix.map(region_lookup)
+    gdf_with_region['FSA'] = fsa_prefix
+
+    missing_regions = gdf_with_region['Region'].isna().sum()
+    if missing_regions:
+        print(f"[Region Join] Warning: {missing_regions} FSA geometries missing region mapping")
+    else:
+        print("[Region Join] All FSA geometries mapped to regions")
+
+    return gdf_with_region
+
+
+def save_pembina_fsa_geojson(gdf_fsa_pembina, output_path: Path) -> Path:
+    """Persist Pembina corridor FSAs (with regions) to GeoJSON."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    gdf_fsa_pembina.to_file(output_path, driver="GeoJSON")
+    print(f"[Pembina Export] Saved {len(gdf_fsa_pembina)} FSAs to {output_path}")
     return output_path
 
 
@@ -305,9 +353,11 @@ def main():
     script_dir = Path(__file__).parent
     project_root = script_dir.parent
     data_dir = project_root / 'data'
+    geojson_dir = project_root / 'geojsons'
     
     fsa_shapefile = data_dir / 'lfsa000b21a_e' / 'lfsa000b21a_e.shp'
     postal_codes_csv = data_dir / 'postal_codes.csv'
+    pembina_fsas_csv = data_dir / 'pembina_fsas.csv'
     ontario_boundary_geojson = data_dir / 'Ontario_Provincial_Boundary.geojson'
     
     # Verify files exist
@@ -315,6 +365,7 @@ def main():
     for file_path, file_name in [
         (fsa_shapefile, 'FSA Shapefile'),
         (postal_codes_csv, 'Postal Codes CSV'),
+        (pembina_fsas_csv, 'Pembina FSAs CSV'),
         (ontario_boundary_geojson, 'Ontario Boundary GeoJSON')
     ]:
         exists_status = "✓" if file_path.exists() else "✗"
@@ -325,6 +376,8 @@ def main():
         raise FileNotFoundError(f"FSA Shapefile not found at: {fsa_shapefile}")
     if not postal_codes_csv.exists():
         raise FileNotFoundError(f"Postal codes CSV not found at: {postal_codes_csv}")
+    if not pembina_fsas_csv.exists():
+        raise FileNotFoundError(f"Pembina FSAs CSV not found at: {pembina_fsas_csv}")
     if not ontario_boundary_geojson.exists():
         raise FileNotFoundError(f"Ontario boundary GeoJSON not found at: {ontario_boundary_geojson}")
     
@@ -346,9 +399,19 @@ def main():
     print("\n4. Filtering FSAs to match target postal codes...")
     gdf_fsa_target = filter_fsa_by_postal_codes(gdf_fsa_all, df_postal, gdf_boundary)
 
-    # Persist filtered FSAs for downstream use
-    target_fsa_geojson = data_dir / 'target_fsas.geojson'
+    # Persist filtered FSAs for downstream use (write to geojsons/ for consistency)
+    target_fsa_geojson = geojson_dir / 'target_fsas.geojson'
     save_target_fsa_geojson(gdf_fsa_target, target_fsa_geojson)
+
+    print("\n5. Loading Pembina FSAs...")
+    df_pembina = load_pembina_fsas(pembina_fsas_csv)
+
+    print("\n6. Filtering Pembina FSAs and attaching regions...")
+    gdf_fsa_pembina = filter_fsa_by_postal_codes(gdf_fsa_all, df_pembina, gdf_boundary)
+    gdf_fsa_pembina = attach_region_to_fsas(gdf_fsa_pembina, df_pembina)
+
+    pembina_fsa_geojson = geojson_dir / 'pembina_fsas.geojson'
+    save_pembina_fsa_geojson(gdf_fsa_pembina, pembina_fsa_geojson)
     
     # Display statistics
     print("\n" + "=" * 70)
@@ -358,9 +421,11 @@ def main():
     print(f"Unique FSAs in postal codes: {df_postal['FSA'].nunique()}")
     print(f"FSA features in shapefile: {len(gdf_fsa_target)}")
     print(f"Total area covered: {gdf_fsa_target.geometry.area.sum() / 1e6:.2f} km²")
+    print(f"Pembina CSV rows: {len(df_pembina)} | Unique Pembina FSAs: {df_pembina['FSA'].nunique()}")
+    print(f"Pembina FSA geometries exported: {len(gdf_fsa_pembina)}")
     
     # Visualize
-    print("\n5. Creating visualization...")
+    print("\n7. Creating visualization...")
     visualize_fsas(gdf_fsa_target, gdf_boundary)
     
     print("\n" + "=" * 70)
