@@ -30,7 +30,7 @@ LAYER_CONFIG = [
         "name": "Public Charging FSAs",
         "filename": "public_charging_fsas.geojson",
         "style_key": "public_charging_fsas",
-        "zorder": 2,
+        "zorder": 4,
     },
     {
         "name": "Target FSAs",
@@ -42,7 +42,7 @@ LAYER_CONFIG = [
         "name": "Pembina FSAs",
         "filename": "pembina_fsas.geojson",
         "style_key": "pembina_fsas",
-        "zorder": 4,
+        "zorder": 2,
     },
     {
         "name": "Primary Freight Corridors",
@@ -109,19 +109,19 @@ STYLE_MAP: Dict[str, Dict[str, Any]] = {
     "target_fsas": {
         "color": "#d4af00",
         "fillColor": "#ffaa33",
-        "fillOpacity": 0.55,
+        "fillOpacity": 1.0,
         "weight": 0.8,
     },
     "pembina_fsas": {
         "color": "#1f7a45",
         "fillColor": "#3c9d5e",
-        "fillOpacity": 0.55,
+        "fillOpacity": 1.0,
         "weight": 0.8,
     },
     "public_charging_fsas": {
         "color": "#cc0000",
         "fillColor": "#ff6666",
-        "fillOpacity": 0.5,
+        "fillOpacity": 1.0,
         "weight": 0.8,
     },
     "public_charging_cities": {
@@ -196,6 +196,8 @@ def _style_function(style_key: str):
             "color": style.get("color", "#444"),
             "fillColor": style.get("fillColor", style.get("color", "#888")),
             "fillOpacity": style.get("fillOpacity", 0.0),
+            "opacity": style.get("opacity", 1.0),
+            "fill": True,
             "weight": style.get("weight", 1.0),
             "dashArray": style.get("dashArray"),
         }
@@ -228,6 +230,7 @@ def _highway_style_function(style_key: str):
             "color": style.get("color", "#444"),
             "fillColor": style.get("fillColor", style.get("color", "#888")),
             "fillOpacity": style.get("fillOpacity", 0.0),
+            "opacity": style.get("opacity", 1.0),
             "weight": scaled_weight,
             "dashArray": style.get("dashArray"),
         }
@@ -270,9 +273,6 @@ def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dic
 
     if is_point_geom:
         fg = folium.FeatureGroup(name=name, show=True)
-        fg.name = layer_id
-        fg._layer_id = layer_id
-        fg.options['zindex'] = zorder
         style = STYLE_MAP.get(style_key, {})
         for feat in features:
             geom = feat.get("geometry", {})
@@ -321,7 +321,6 @@ def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dic
                 sticky=False,
             ) if prop_fields else None,
         )
-        gj.name = layer_id
         gj.options['zindex'] = zorder
         gj.add_to(map_obj)
     
@@ -406,51 +405,97 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
     else:
         map_obj = folium.Map(location=[50.0, -85.0], zoom_start=5, tiles="CartoDB positron")
 
-    # Add layers
-    for i, cfg in enumerate(LAYER_CONFIG):
+    # Build legend-ordered layer sequence with group metadata
+    legend_order = []
+    layer_to_label = {}  # Map layer name to legend label
+    layer_to_group = {}  # Map layer name to group
+    
+    for group_data in LEGEND_ITEMS:
+        group_name = group_data["group"]
+        for item in group_data["items"]:
+            layer_name = item["layer_name"]
+            legend_order.append(layer_name)
+            layer_to_label[layer_name] = item["label"]
+            layer_to_group[layer_name] = group_name
+    
+    # Create a mapping from layer name to config
+    layer_map = {cfg["name"]: cfg for cfg in LAYER_CONFIG}
+    
+    # Add layers in z-order (for proper visual stacking)
+    for cfg in sorted(LAYER_CONFIG, key=lambda x: x["zorder"]):
         filename = cfg["filename"]
         data = geojson_data.get(filename)
         if not data:
             continue
-        layer_id = f"layer_{i}"
-        _add_geojson_layer(map_obj, data, cfg, layer_id)
+        _add_geojson_layer(map_obj, data, cfg, f"layer_{cfg['zorder']}")
 
     _add_legend(map_obj)
     
     # Add Folium's built-in layer control (will work out of the box with proper styling)
     folium.LayerControl(collapsed=False, position='topright').add_to(map_obj)
 
-    # Add script to sync legend with layer control checkboxes
+    # Build layer name mapping for JS
+    layer_label_map = {}
+    layer_group_map = {}
+    for layer_name in legend_order:
+        layer_label_map[layer_name] = layer_to_label[layer_name]
+        layer_group_map[layer_name] = layer_to_group[layer_name]
+    
+    layer_label_json = json.dumps(layer_label_map)
+    layer_group_json = json.dumps(layer_group_map)
+    legend_order_json = json.dumps(legend_order)
+    
+    # Add script to reorder checkboxes and sync legend
     legend_sync_script = (
         "<script>"
+        f"var layerLabelMap = {layer_label_json}; "
+        f"var layerGroupMap = {layer_group_json}; "
+        f"var legendOrder = {legend_order_json}; "
+        "function reorderLayerControl() { "
+        "  var controlPanel = document.querySelector('.leaflet-control-layers-overlays'); "
+        "  if (!controlPanel) return false; "
+        "  controlPanel.style.display = 'flex'; "
+        "  controlPanel.style.flexDirection = 'column'; "
+        "  var labels = controlPanel.querySelectorAll('label'); "
+        "  labels.forEach(function(label) { "
+        "    var span = label.querySelector('span'); "
+        "    if (!span) return; "
+        "    var layerName = span.textContent.trim(); "
+        "    var order = legendOrder.indexOf(layerName); "
+        "    if (order >= 0) label.style.order = order; "
+        "  }); "
+        "  return true; "
+        "} "
         "function syncLegendWithLayerControl() { "
-        "  var layerControlInputs = document.querySelectorAll('.leaflet-control-layers input[type=\"checkbox\"]'); "
-        "  var legendEntries = document.querySelectorAll('.legend-entry'); "
-        "  legendEntries.forEach(function(entry) { "
-        "    var targetLayerName = entry.getAttribute('data-layer-name'); "
-        "    var isChecked = false; "
-        "    layerControlInputs.forEach(function(input) { "
-        "      var label = input.nextElementSibling; "
-        "      if (label && label.textContent.trim() === targetLayerName) { "
-        "        isChecked = input.checked; "
+        "  var checkedLayers = new Set(); "
+        "  document.querySelectorAll('.leaflet-control-layers input[type=\"checkbox\"]').forEach(function(input) { "
+        "    if (input.checked) { "
+        "      var span = input.nextElementSibling; "
+        "      if (span && span.textContent) { "
+        "        checkedLayers.add(span.textContent.trim()); "
         "      } "
-        "    }); "
-        "    entry.style.opacity = isChecked ? '1' : '0.5'; "
+        "    } "
+        "  }); "
+        "  document.querySelectorAll('.legend-entry').forEach(function(entry) { "
+        "    entry.style.opacity = checkedLayers.has(entry.getAttribute('data-layer-name')) ? '1' : '0.5'; "
         "  }); "
         "} "
-        "function initDynamicLegend() { "
-        "  var controlPanel = document.querySelector('.leaflet-control-layers'); "
-        "  if (!controlPanel) { "
-        "    setTimeout(initDynamicLegend, 300); "
+        "function initLegendSync() { "
+        "  if (!document.querySelector('.leaflet-control-layers')) { "
+        "    setTimeout(initLegendSync, 200); "
         "    return; "
         "  } "
+        "  reorderLayerControl(); "
         "  syncLegendWithLayerControl(); "
-        "  var inputs = document.querySelectorAll('.leaflet-control-layers input[type=\"checkbox\"]'); "
-        "  inputs.forEach(function(input) { "
+        "  document.querySelectorAll('.leaflet-control-layers input[type=\"checkbox\"]').forEach(function(input) { "
         "    input.addEventListener('change', syncLegendWithLayerControl); "
         "  }); "
         "} "
-        "setTimeout(initDynamicLegend, 800); "
+        "if (document.readyState === 'loading') { "
+        "  document.addEventListener('DOMContentLoaded', function() { setTimeout(initLegendSync, 500); }); "
+        "} else { "
+        "  setTimeout(initLegendSync, 500); "
+        "} "
         "</script>"
     )
     map_obj.get_root().html.add_child(folium.Element(legend_sync_script))
