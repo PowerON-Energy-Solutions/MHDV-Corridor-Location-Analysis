@@ -378,7 +378,10 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
     script_dir = Path(__file__).parent
     project_root = script_dir.parent
     geojson_dir = geojson_dir or project_root / "geojsons"
-    output_path = output_path or (project_root / "plots" / "geojson_viewer.html")
+    output_path = output_path or (project_root / "viewer" / "geojson_viewer.html")
+
+    # Ensure the destination directory exists so the viewer can be written reliably.
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if not geojson_dir.exists():
         raise FileNotFoundError(f"GeoJSON directory not found: {geojson_dir}")
