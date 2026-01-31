@@ -27,7 +27,7 @@ LAYER_CONFIG = [
         "zorder": 1,
     },
     {
-        "name": "Public Charging FSAs",
+        "name": "FSAs of Interest for MHDV Commercial Charging Hub",
         "filename": "public_charging_fsas.geojson",
         "style_key": "public_charging_fsas",
         "zorder": 4,
@@ -57,7 +57,7 @@ LAYER_CONFIG = [
         "zorder": 6,
     },
     {
-        "name": "Numbered Highways",
+        "name": "Highways of Interest for MHDV Commercial Charging Hub",
         "filename": "gta_numbered_highways.geojson",
         "style_key": "numbered_highways",
         "zorder": 7,
@@ -69,10 +69,16 @@ LAYER_CONFIG = [
         "zorder": 8,
     },
     {
-        "name": "Public Charging Cities",
-        "filename": "public_charging_cities.geojson",
+        "name": "Cities of Interest for MHDV Commercial Charging Hub",
+        "filename": "public_charging_cities_points.geojson",
         "style_key": "public_charging_cities",
         "zorder": 9,
+    },
+    {
+        "name": "City Boundaries",
+        "filename": "public_charging_cities_boundaries.geojson",
+        "style_key": "city_boundaries",
+        "zorder": 99,  # Draw on top
     },
 ]
 
@@ -119,13 +125,13 @@ STYLE_MAP: Dict[str, Dict[str, Any]] = {
         "weight": 0.8,
     },
     "public_charging_fsas": {
-        "color": "#cc0000",
-        "fillColor": "#ff6666",
+        "color": "#ff0000",
+        "fillColor": "#ff0000",
         "fillOpacity": 1.0,
         "weight": 0.8,
     },
     "public_charging_cities": {
-        "color": "#cc0000",
+        "color": "#ff0000",
         "fillColor": "#ff0000",
         "fillOpacity": 0.9,
         "radius": 6,
@@ -137,6 +143,14 @@ STYLE_MAP: Dict[str, Dict[str, Any]] = {
         "fillOpacity": 0.9,
         "radius": 6,
         "weight": 0.8,
+    },
+    "city_boundaries": {
+        "color": "#b80303",
+        "weight": 2.5,
+        "fillOpacity": 0.0,
+        "opacity": 1.0,
+        "fill": False,
+        "dashArray": "6, 6",
     },
     "freight_corridors": {
         "color": "#000000",
@@ -156,11 +170,12 @@ STYLE_MAP: Dict[str, Dict[str, Any]] = {
 # Legend items organized by section.
 LEGEND_ITEMS: List[Dict[str, Any]] = [
     {
-        "group": "Of Interest for Public Charging",
+        "group": "Of Interest for MHDV Commercial Charging Hub",
         "items": [
-            {"label": "Cities", "color": STYLE_MAP["public_charging_cities"]["fillColor"], "shape": "circle", "layer_name": "Public Charging Cities"},
-            {"label": "FSAs", "color": STYLE_MAP["public_charging_fsas"]["fillColor"], "shape": "square", "layer_name": "Public Charging FSAs"},
-            {"label": "Highways", "color": STYLE_MAP["numbered_highways"]["color"], "shape": "line", "layer_name": "Numbered Highways"},
+            {"label": "Cities", "color": STYLE_MAP["public_charging_cities"]["fillColor"], "shape": "circle", "layer_name": "Cities of Interest for MHDV Commercial Charging Hub"},
+            {"label": "City Boundaries", "color": "#b80303", "shape": "line", "layer_name": "City Boundaries", "dash": True},
+            {"label": "FSAs", "color": STYLE_MAP["public_charging_fsas"]["fillColor"], "shape": "square", "layer_name": "FSAs of Interest for MHDV Commercial Charging Hub"},
+            {"label": "Highways", "color": STYLE_MAP["numbered_highways"]["color"], "shape": "line", "layer_name": "Highways of Interest for MHDV Commercial Charging Hub"},
         ]
     },
     {
@@ -345,14 +360,16 @@ def _add_legend(map_obj: folium.Map):
             color = item["color"]
             label = item["label"]
             layer_name = item.get("layer_name", label)
-            
             if shape == "circle":
                 marker_html = f"<span style='display:inline-block;width:12px;height:12px;border-radius:50%;background:{color};border:1px solid #000;margin-right:6px;'></span>"
             elif shape == "line":
-                marker_html = f"<span style='display:inline-block;width:18px;height:3px;background:{color};margin-right:6px;'></span>"
+                dash = item.get("dash", False)
+                if dash:
+                    marker_html = f"<span style='display:inline-block;width:18px;height:0;border-bottom:3px dashed {color};margin-right:6px;'></span>"
+                else:
+                    marker_html = f"<span style='display:inline-block;width:18px;height:3px;background:{color};margin-right:6px;'></span>"
             else:  # square / polygon
                 marker_html = f"<span style='display:inline-block;width:12px;height:12px;background:{color};margin-right:6px;border:1px solid #555;'></span>"
-            
             legend_html_sections.append(
                 f"<div class='legend-entry' data-layer-name='{layer_name}' "
                 f"style='margin:2px 0;display:flex;align-items:center;padding:3px 0;' >"
@@ -374,6 +391,23 @@ def _add_legend(map_obj: folium.Map):
 
 
 def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | None = None) -> Path:
+    script_dir = Path(__file__).parent
+    project_root = script_dir.parent
+    geojson_dir = geojson_dir or project_root / "geojsons"
+    output_path = output_path or (project_root / "viewer" / "geojson_viewer.html")
+
+    # Map initialization centered on Ontario boundary if available.
+    boundary_path = geojson_dir / "Ontario_Provincial_Boundary.geojson"
+    if boundary_path.exists():
+        gdf_boundary = gpd.read_file(boundary_path)
+        bounds = gdf_boundary.total_bounds  # minx, miny, maxx, maxy
+        center = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
+        map_obj = folium.Map(location=center, zoom_start=6, tiles="CartoDB positron")
+        map_obj.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
+    else:
+        map_obj = folium.Map(location=[50.0, -85.0], zoom_start=5, tiles="CartoDB positron")
+
+    # City boundaries are now handled as a regular layer in LAYER_CONFIG for proper z-order and toggling
     script_dir = Path(__file__).parent
     project_root = script_dir.parent
     geojson_dir = geojson_dir or project_root / "geojsons"

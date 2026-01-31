@@ -3,7 +3,7 @@ Public charging analysis helpers for GTA overlays.
 
 Functions here:
 1) Extract numbered highway segments within the GTA boundary and save to GeoJSON.
-2) Convert public charging cities (CSV) to a point GeoJSON.
+2) Convert public charging cities (CSV) to point and boundary GeoJSONs.
 3) Filter FSA boundaries for the public charging FSAs list and save to GeoJSON.
 4) Convert refueling stops (CSV) to a point GeoJSON.
 
@@ -97,12 +97,26 @@ def extract_gta_numbered_highways(
 
 def cities_to_geojson(
     cities_csv: Path = DATA_DIR / "public_charging_cities.csv",
-    output_path: Path = DATA_DIR / "public_charging_cities.geojson",
-) -> gpd.GeoDataFrame:
-    """Convert public charging city locations (CSV) to a GeoJSON of points."""
+    municipal_boundary_geojson: Path = DATA_DIR / "Municipal_Boundary_-_Lower_and_Single_Tier.geojson",
+    points_output_path: Path = DATA_DIR / "public_charging_cities_points.geojson",
+    boundaries_output_path: Path = DATA_DIR / "public_charging_cities_boundaries.geojson",
+) -> Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    """Convert public charging cities (CSV) to point and boundary GeoJSONs."""
 
     if not cities_csv.exists():
         raise FileNotFoundError(f"Cities CSV not found: {cities_csv}")
+    if not municipal_boundary_geojson.exists():
+        raise FileNotFoundError(f"Municipal boundary GeoJSON not found: {municipal_boundary_geojson}")
+
+    # Mapping from city names in CSV to MUNICIPAL_NAME in boundary file
+    city_to_municipal_name = {
+        "Cambridge": "CITY OF CAMBRIDGE",
+        "Windsor": "CITY OF WINDSOR",
+        "Hamilton": "CITY OF HAMILTON",
+        "Mississauga": "CITY OF MISSISSAUGA",
+        "Oshawa": "CITY OF OSHAWA",
+        "Barrie": "CITY OF BARRIE",
+    }
 
     df = pd.read_csv(cities_csv)
     required_cols = {"City", "Latitude", "Longitude"}
@@ -110,17 +124,42 @@ def cities_to_geojson(
     if missing:
         raise ValueError(f"Cities CSV missing columns: {sorted(missing)}")
 
+    # --- Points output (from CSV) ---
     df_clean = df.dropna(subset=["Latitude", "Longitude"]).copy()
     df_clean["Longitude"] = pd.to_numeric(df_clean["Longitude"], errors="coerce")
     df_clean["Latitude"] = pd.to_numeric(df_clean["Latitude"], errors="coerce")
     df_clean = df_clean.dropna(subset=["Latitude", "Longitude"])
 
     geometry = [Point(lon, lat) for lon, lat in zip(df_clean["Longitude"], df_clean["Latitude"])]
-    gdf = gpd.GeoDataFrame(df_clean, geometry=geometry, crs="EPSG:4326")
-    print(f"\n[Cities to GeoJSON] Created {len(gdf)} city points with CRS: {gdf.crs}")
+    gdf_points = gpd.GeoDataFrame(df_clean, geometry=geometry, crs="EPSG:4326")
+    print(f"\n[Cities to GeoJSON] Created {len(gdf_points)} city points with CRS: {gdf_points.crs}")
 
-    _save_geojson(gdf, output_path)
-    return gdf
+    _save_geojson(gdf_points, points_output_path)
+
+    # --- Boundary output (from municipal boundary file) ---
+    cities_in_csv = df["City"].dropna().unique()
+    target_municipal_names = [
+        city_to_municipal_name[city] for city in cities_in_csv
+        if city in city_to_municipal_name
+    ]
+
+    if not target_municipal_names:
+        raise ValueError(f"No matching municipalities found. Cities in CSV: {cities_in_csv}")
+
+    gdf_boundaries = gpd.read_file(municipal_boundary_geojson)
+    print(f"\n[Cities to GeoJSON] Loaded {len(gdf_boundaries)} municipalities from boundary file")
+    print(f"  Boundary CRS: {gdf_boundaries.crs}")
+
+    gdf_filtered = gdf_boundaries[gdf_boundaries["MUNICIPAL_NAME"].isin(target_municipal_names)].copy()
+    if "MUNICIPAL_AREA_EXTENT_TYPE" in gdf_filtered.columns:
+        gdf_filtered = gdf_filtered[gdf_filtered["MUNICIPAL_AREA_EXTENT_TYPE"] != "Water"].copy()
+    else:
+        print("  ⚠ MUNICIPAL_AREA_EXTENT_TYPE column not found; skipping Water exclusion")
+
+    print(f"  Filtered to {len(gdf_filtered)} matching city boundaries")
+
+    _save_geojson(gdf_filtered, boundaries_output_path)
+    return gdf_points, gdf_filtered
 
 
 # ---------- 3) Public charging FSAs ----------
@@ -193,22 +232,23 @@ def run_all(
     fsas_csv: Path = DATA_DIR / "public_charging_fsas.csv",
     fsa_shapefile: Path = DATA_DIR / "lfsa000b21a_e" / "lfsa000b21a_e.shp",
     refueling_csv: Path = DATA_DIR / "refueling_stops.csv",
-) -> Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame]:
-    """Run all three extraction tasks and return GeoDataFrames."""
+) -> Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame, gpd.GeoDataFrame]:
+    """Run all extraction tasks and return GeoDataFrames."""
 
     gdf_highways = extract_gta_numbered_highways(highways_geojson, gta_boundary_geojson)
-    gdf_cities = cities_to_geojson(cities_csv)
+    gdf_city_points, gdf_city_boundaries = cities_to_geojson(cities_csv)
     gdf_fsas = fsas_to_geojson(fsas_csv, fsa_shapefile)
     # Also export refueling stops for completeness; return signature remains unchanged
     refueling_stops_to_geojson(refueling_csv)
-    return gdf_highways, gdf_cities, gdf_fsas
+    return gdf_highways, gdf_city_points, gdf_city_boundaries, gdf_fsas
 
 
 if __name__ == "__main__":
-    gdf_highways, gdf_cities, gdf_fsas = run_all()
+    gdf_highways, gdf_city_points, gdf_city_boundaries, gdf_fsas = run_all()
     print(
         f"Saved outputs to: {DATA_DIR / 'gta_numbered_highways.geojson'}, "
-        f"{DATA_DIR / 'public_charging_cities.geojson'}, "
+        f"{DATA_DIR / 'public_charging_cities_points.geojson'}, "
+        f"{DATA_DIR / 'public_charging_cities_boundaries.geojson'}, "
         f"{DATA_DIR / 'public_charging_fsas.geojson'}, "
         f"{DATA_DIR / 'refueling_stops.geojson'}"
     )
