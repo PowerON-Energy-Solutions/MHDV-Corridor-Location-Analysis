@@ -108,7 +108,7 @@ STYLE_MAP: Dict[str, Dict[str, Any]] = {
         "weight": 2.0,
     },
     "target_highways": {
-        "color": "#ffaa33",
+        "color": "#0b3d91",
         "weight": 2.0,
         "dashArray": "6 3",
     },
@@ -402,10 +402,10 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
         gdf_boundary = gpd.read_file(boundary_path)
         bounds = gdf_boundary.total_bounds  # minx, miny, maxx, maxy
         center = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
-        map_obj = folium.Map(location=center, zoom_start=6, tiles="CartoDB positron")
+        map_obj = folium.Map(location=center, zoom_start=6, tiles="Esri WorldTopoMap")
         map_obj.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
     else:
-        map_obj = folium.Map(location=[50.0, -85.0], zoom_start=5, tiles="CartoDB positron")
+        map_obj = folium.Map(location=[50.0, -85.0], zoom_start=5, tiles="Esri WorldTopoMap")
 
     # City boundaries are now handled as a regular layer in LAYER_CONFIG for proper z-order and toggling
     script_dir = Path(__file__).parent
@@ -434,10 +434,10 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
         gdf_boundary = gpd.read_file(boundary_path)
         bounds = gdf_boundary.total_bounds  # minx, miny, maxx, maxy
         center = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
-        map_obj = folium.Map(location=center, zoom_start=6, tiles="CartoDB positron")
+        map_obj = folium.Map(location=center, zoom_start=6, tiles="Esri WorldTopoMap")
         map_obj.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
     else:
-        map_obj = folium.Map(location=[50.0, -85.0], zoom_start=5, tiles="CartoDB positron")
+        map_obj = folium.Map(location=[50.0, -85.0], zoom_start=5, tiles="Esri WorldTopoMap")
 
     # Build legend-ordered layer sequence with group metadata
     legend_order = []
