@@ -17,7 +17,7 @@ import geopandas as gpd
 import pandas as pd
 from shapely.geometry import Point
 
-from map_generation import normalize_highway_name
+from source.Highways import normalize_highway_name
 from postal_code_analysis import load_fsa_shapefile
 
 
