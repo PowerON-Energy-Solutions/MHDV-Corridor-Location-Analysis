@@ -34,9 +34,9 @@ LAYER_CONFIG = [
         "zorder": 4,
     },
     {
-        "name": "Target FSAs",
-        "filename": "target_fsas.geojson",
-        "style_key": "target_fsas",
+        "name": "Working Group Survey: FSAs",
+        "filename": "working_group_survey_fsas.geojson",
+        "style_key": "working_group_survey_fsas",
         "zorder": 3,
     },
     {
@@ -46,9 +46,9 @@ LAYER_CONFIG = [
         "zorder": 5,
     },
     {
-        "name": "Target Highways",
-        "filename": "target_highways.geojson",
-        "style_key": "target_highways",
+        "name": "Working Group Survey: Highways",
+        "filename": "working_group_survey_highways.geojson",
+        "style_key": "working_group_survey_highways",
         "zorder": 6,
     },
     {
@@ -62,12 +62,6 @@ LAYER_CONFIG = [
         "filename": "refueling_stops.geojson",
         "style_key": "refueling_stops",
         "zorder": 8,
-    },
-    {
-        "name": "Cities of Interest for MHDV Commercial Charging Hub",
-        "filename": "public_charging_cities_points.geojson",
-        "style_key": "public_charging_cities",
-        "zorder": 9,
     },
     {
         "name": "City Boundaries",
@@ -123,12 +117,12 @@ STYLE_MAP: Dict[str, Dict[str, Any]] = {
         "color": "#ff0000",
         "weight": 2.0,
     },
-    "target_highways": {
+    "working_group_survey_highways": {
         "color": "#0b3d91",
         "weight": 2.0,
         "dashArray": "6 3",
     },
-    "target_fsas": {
+    "working_group_survey_fsas": {
         "color": "#d4af00",
         "fillColor": "#ffaa33",
         "fillOpacity": 1.0,
@@ -138,13 +132,6 @@ STYLE_MAP: Dict[str, Dict[str, Any]] = {
         "color": "#ff0000",
         "fillColor": "#ff0000",
         "fillOpacity": 1.0,
-        "weight": 0.8,
-    },
-    "public_charging_cities": {
-        "color": "#ff0000",
-        "fillColor": "#ff0000",
-        "fillOpacity": 0.9,
-        "radius": 6,
         "weight": 0.8,
     },
     "refueling_stops": {
@@ -192,7 +179,6 @@ LEGEND_ITEMS: List[Dict[str, Any]] = [
     {
         "group": "Of Interest for MHDV Commercial Charging Hub",
         "items": [
-            {"label": "Cities", "color": STYLE_MAP["public_charging_cities"]["fillColor"], "shape": "circle", "layer_name": "Cities of Interest for MHDV Commercial Charging Hub"},
             {"label": "City Boundaries", "color": "#b80303", "shape": "line", "layer_name": "City Boundaries", "dash": True},
             {"label": "FSAs", "color": STYLE_MAP["public_charging_fsas"]["fillColor"], "shape": "square", "layer_name": "FSAs of Interest for MHDV Commercial Charging Hub"},
             {"label": "Highways", "color": STYLE_MAP["numbered_highways"]["color"], "shape": "line", "layer_name": "Highways of Interest for MHDV Commercial Charging Hub"},
@@ -201,8 +187,8 @@ LEGEND_ITEMS: List[Dict[str, Any]] = [
     {
         "group": "Highly Used by Consortium Members",
         "items": [
-            {"label": "Endpoints", "color": STYLE_MAP["target_fsas"]["fillColor"], "shape": "square", "layer_name": "Target FSAs"},
-            {"label": "Highways", "color": STYLE_MAP["target_highways"]["color"], "shape": "line", "layer_name": "Target Highways"},
+            {"label": "Working Group Survey: FSAs", "color": STYLE_MAP["working_group_survey_fsas"]["fillColor"], "shape": "square", "layer_name": "Working Group Survey: FSAs"},
+            {"label": "Working Group Survey: Highways", "color": STYLE_MAP["working_group_survey_highways"]["color"], "shape": "line", "layer_name": "Working Group Survey: Highways"},
             {"label": "Refueling Stops", "color": STYLE_MAP["refueling_stops"]["fillColor"], "shape": "circle", "layer_name": "Refueling Stops"},
         ]
     },
@@ -331,7 +317,7 @@ def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dic
     show = layer_cfg.get("show", True)
     
     # Use AADTT16-based styling for highway/line layers
-    is_highway = style_key in {"target_highways", "numbered_highways", "freight_corridors"}
+    is_highway = style_key in {"working_group_survey_highways", "numbered_highways", "freight_corridors"}
     if style_key == "cima_stops":
         style_fn = _cima_scaled_style_function(style_key, data, "StopCount", 1.0, 6.0)
     elif style_key == "cima_od":
