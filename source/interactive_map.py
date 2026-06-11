@@ -28,12 +28,6 @@ LAYER_CONFIG = [
         "zorder": 1,
     },
     {
-        "name": "FSAs of Interest for MHDV Commercial Charging Hub",
-        "filename": "public_charging_fsas.geojson",
-        "style_key": "public_charging_fsas",
-        "zorder": 4,
-    },
-    {
         "name": "Working Group Survey: FSAs",
         "filename": "working_group_survey_fsas.geojson",
         "style_key": "working_group_survey_fsas",
@@ -52,13 +46,7 @@ LAYER_CONFIG = [
         "zorder": 6,
     },
     {
-        "name": "Highways of Interest for MHDV Commercial Charging Hub",
-        "filename": "gta_numbered_highways.geojson",
-        "style_key": "numbered_highways",
-        "zorder": 7,
-    },
-    {
-        "name": "Refueling Stops",
+        "name": "Working Group Survey: Current Refueling Stops",
         "filename": "refueling_stops.geojson",
         "style_key": "refueling_stops",
         "zorder": 8,
@@ -113,10 +101,6 @@ STYLE_MAP: Dict[str, Dict[str, Any]] = {
         "weight": 1.2,
         "dashArray": "3 2",
     },
-    "numbered_highways": {
-        "color": "#ff0000",
-        "weight": 2.0,
-    },
     "working_group_survey_highways": {
         "color": "#0b3d91",
         "weight": 2.0,
@@ -125,12 +109,6 @@ STYLE_MAP: Dict[str, Dict[str, Any]] = {
     "working_group_survey_fsas": {
         "color": "#d4af00",
         "fillColor": "#ffaa33",
-        "fillOpacity": 1.0,
-        "weight": 0.8,
-    },
-    "public_charging_fsas": {
-        "color": "#ff0000",
-        "fillColor": "#ff0000",
         "fillOpacity": 1.0,
         "weight": 0.8,
     },
@@ -180,8 +158,6 @@ LEGEND_ITEMS: List[Dict[str, Any]] = [
         "group": "Of Interest for MHDV Commercial Charging Hub",
         "items": [
             {"label": "City Boundaries", "color": "#b80303", "shape": "line", "layer_name": "City Boundaries", "dash": True},
-            {"label": "FSAs", "color": STYLE_MAP["public_charging_fsas"]["fillColor"], "shape": "square", "layer_name": "FSAs of Interest for MHDV Commercial Charging Hub"},
-            {"label": "Highways", "color": STYLE_MAP["numbered_highways"]["color"], "shape": "line", "layer_name": "Highways of Interest for MHDV Commercial Charging Hub"},
         ]
     },
     {
@@ -189,7 +165,7 @@ LEGEND_ITEMS: List[Dict[str, Any]] = [
         "items": [
             {"label": "Working Group Survey: FSAs", "color": STYLE_MAP["working_group_survey_fsas"]["fillColor"], "shape": "square", "layer_name": "Working Group Survey: FSAs"},
             {"label": "Working Group Survey: Highways", "color": STYLE_MAP["working_group_survey_highways"]["color"], "shape": "line", "layer_name": "Working Group Survey: Highways"},
-            {"label": "Refueling Stops", "color": STYLE_MAP["refueling_stops"]["fillColor"], "shape": "circle", "layer_name": "Refueling Stops"},
+            {"label": "Working Group Survey: Current Refueling Stops", "color": STYLE_MAP["refueling_stops"]["fillColor"], "shape": "circle", "layer_name": "Working Group Survey: Current Refueling Stops"},
         ]
     },
     {
@@ -317,7 +293,7 @@ def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dic
     show = layer_cfg.get("show", True)
     
     # Use AADTT16-based styling for highway/line layers
-    is_highway = style_key in {"working_group_survey_highways", "numbered_highways", "freight_corridors"}
+    is_highway = style_key in {"working_group_survey_highways", "freight_corridors"}
     if style_key == "cima_stops":
         style_fn = _cima_scaled_style_function(style_key, data, "StopCount", 1.0, 6.0)
     elif style_key == "cima_od":
