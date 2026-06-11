@@ -1,11 +1,12 @@
 """
 Interactive GeoJSON viewer using Folium/Leaflet.
-Loads all known GeoJSON layers from the geojsons directory and renders
+Loads all known GeoJSON layers from the "active geojsons" directory and renders
 an interactive map with layer toggles and a styled legend (QGIS-like stack).
 """
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Dict, Any, List
 
@@ -37,12 +38,6 @@ LAYER_CONFIG = [
         "filename": "target_fsas.geojson",
         "style_key": "target_fsas",
         "zorder": 3,
-    },
-    {
-        "name": "Pembina FSAs",
-        "filename": "pembina_fsas.geojson",
-        "style_key": "pembina_fsas",
-        "zorder": 2,
     },
     {
         "name": "Primary Freight Corridors",
@@ -82,6 +77,27 @@ LAYER_CONFIG = [
     },
 ]
 
+# CIMA+/Geotab layers come in rank tiers (tier 1 = highest volume, produced
+# by cima_preprocessing.py). Only tier 1 of each dataset is shown initially.
+CIMA_STOP_TIERS = 7
+CIMA_OD_TIERS = 5
+for _tier in range(1, CIMA_STOP_TIERS + 1):
+    LAYER_CONFIG.append({
+        "name": f"CIMA+ stop data ({_tier})",
+        "filename": f"cima_stops_{_tier}.geojson",
+        "style_key": "cima_stops",
+        "zorder": 10,
+        "show": _tier == 1,
+    })
+for _tier in range(1, CIMA_OD_TIERS + 1):
+    LAYER_CONFIG.append({
+        "name": f"CIMA+ Origin Destination data ({_tier})",
+        "filename": f"cima_od_{_tier}.geojson",
+        "style_key": "cima_od",
+        "zorder": 11,
+        "show": _tier == 1,
+    })
+
 # Style palette keyed by style_key in LAYER_CONFIG.
 STYLE_MAP: Dict[str, Dict[str, Any]] = {
     "ontario_boundary": {
@@ -115,12 +131,6 @@ STYLE_MAP: Dict[str, Dict[str, Any]] = {
     "target_fsas": {
         "color": "#d4af00",
         "fillColor": "#ffaa33",
-        "fillOpacity": 1.0,
-        "weight": 0.8,
-    },
-    "pembina_fsas": {
-        "color": "#1f7a45",
-        "fillColor": "#3c9d5e",
         "fillOpacity": 1.0,
         "weight": 0.8,
     },
@@ -165,6 +175,16 @@ STYLE_MAP: Dict[str, Dict[str, Any]] = {
         "fillOpacity": 0.15,
         "weight": 0,
     },
+    "cima_stops": {
+        "color": "#008b8b",
+        "weight": 3.0,
+        "opacity": 0.9,
+    },
+    "cima_od": {
+        "color": "#e91e8c",
+        "weight": 1.5,
+        "opacity": 0.6,
+    },
 }
 
 # Legend items organized by section.
@@ -187,9 +207,10 @@ LEGEND_ITEMS: List[Dict[str, Any]] = [
         ]
     },
     {
-        "group": "Third-party Results",
+        "group": "CIMA+ / Geotab Telematics (Toronto, 2024-09-01 to 09-08)",
         "items": [
-            {"label": "GTHA Priority Zones from Pembina", "color": STYLE_MAP["pembina_fsas"]["fillColor"], "shape": "square", "layer_name": "Pembina FSAs"},
+            {"label": "Stop segments, tiers 1-7 by stop count (width = stops)", "color": STYLE_MAP["cima_stops"]["color"], "shape": "line", "layer_name": "CIMA+ stop data (1)"},
+            {"label": "Origin-Destination flows, tiers 1-5 (width = journeys)", "color": STYLE_MAP["cima_od"]["color"], "shape": "line", "layer_name": "CIMA+ Origin Destination data (1)"},
         ]
     },
     {
@@ -253,6 +274,38 @@ def _highway_style_function(style_key: str):
     return fn
 
 
+def _cima_scaled_style_function(style_key: str, data: Dict[str, Any], metric: str,
+                                min_weight: float = 1.0, max_weight: float = 8.0):
+    """Style function that scales line weight/opacity by a numeric property.
+
+    Normalizes against the dataset-wide "scaleMax" written into each tier file
+    by cima_preprocessing.py, so widths are comparable across tiers; falls
+    back to the layer's own maximum."""
+    style = STYLE_MAP.get(style_key, {})
+    base_opacity = style.get("opacity", 0.9)
+    max_value = data.get("scaleMax")
+    if not max_value:
+        values = [
+            feat.get("properties", {}).get(metric) or 0
+            for feat in data.get("features", [])
+        ]
+        max_value = max(values) if values else 1
+
+    def fn(feature):
+        value = feature.get("properties", {}).get(metric) or 0
+        frac = float(value) / max_value if max_value else 0.0
+        return {
+            "color": style.get("color", "#444"),
+            "fillColor": style.get("fillColor", style.get("color", "#888")),
+            "fillOpacity": 0.0,
+            "opacity": base_opacity * (0.4 + 0.6 * frac),
+            "weight": min_weight + (max_weight - min_weight) * frac,
+            "dashArray": style.get("dashArray"),
+        }
+
+    return fn
+
+
 def _load_geojson(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
@@ -275,10 +328,18 @@ def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dic
     name = layer_cfg["name"]
     style_key = layer_cfg["style_key"]
     zorder = layer_cfg.get("zorder", 0)
+    show = layer_cfg.get("show", True)
     
     # Use AADTT16-based styling for highway/line layers
     is_highway = style_key in {"target_highways", "numbered_highways", "freight_corridors"}
-    style_fn = _highway_style_function(style_key) if is_highway else _style_function(style_key)
+    if style_key == "cima_stops":
+        style_fn = _cima_scaled_style_function(style_key, data, "StopCount", 1.0, 6.0)
+    elif style_key == "cima_od":
+        style_fn = _cima_scaled_style_function(style_key, data, "JourneyCount", 0.8, 7.0)
+    elif is_highway:
+        style_fn = _highway_style_function(style_key)
+    else:
+        style_fn = _style_function(style_key)
 
     features = data.get("features", [])
     is_point_geom = all(
@@ -287,7 +348,7 @@ def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dic
     )
 
     if is_point_geom:
-        fg = folium.FeatureGroup(name=name, show=True)
+        fg = folium.FeatureGroup(name=name, show=show)
         style = STYLE_MAP.get(style_key, {})
         for feat in features:
             geom = feat.get("geometry", {})
@@ -328,6 +389,7 @@ def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dic
         gj = folium.GeoJson(
             data,
             name=name,
+            show=show,
             style_function=style_fn,
             highlight_function=highlight_fn,
             tooltip=folium.features.GeoJsonTooltip(
@@ -393,7 +455,7 @@ def _add_legend(map_obj: folium.Map):
 def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | None = None) -> Path:
     script_dir = Path(__file__).parent
     project_root = script_dir.parent
-    geojson_dir = geojson_dir or project_root / "geojsons"
+    geojson_dir = geojson_dir or project_root / "active geojsons"
     output_path = output_path or (project_root / "viewer" / "geojson_viewer.html")
 
     # Map initialization centered on Ontario boundary if available.
@@ -402,15 +464,15 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
         gdf_boundary = gpd.read_file(boundary_path)
         bounds = gdf_boundary.total_bounds  # minx, miny, maxx, maxy
         center = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
-        map_obj = folium.Map(location=center, zoom_start=6, tiles="Esri WorldTopoMap")
+        map_obj = folium.Map(location=center, zoom_start=6, tiles="Esri WorldTopoMap", prefer_canvas=True)
         map_obj.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
     else:
-        map_obj = folium.Map(location=[50.0, -85.0], zoom_start=5, tiles="Esri WorldTopoMap")
+        map_obj = folium.Map(location=[50.0, -85.0], zoom_start=5, tiles="Esri WorldTopoMap", prefer_canvas=True)
 
     # City boundaries are now handled as a regular layer in LAYER_CONFIG for proper z-order and toggling
     script_dir = Path(__file__).parent
     project_root = script_dir.parent
-    geojson_dir = geojson_dir or project_root / "geojsons"
+    geojson_dir = geojson_dir or project_root / "active geojsons"
     output_path = output_path or (project_root / "viewer" / "geojson_viewer.html")
 
     # Ensure the destination directory exists so the viewer can be written reliably.
@@ -434,10 +496,10 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
         gdf_boundary = gpd.read_file(boundary_path)
         bounds = gdf_boundary.total_bounds  # minx, miny, maxx, maxy
         center = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
-        map_obj = folium.Map(location=center, zoom_start=6, tiles="Esri WorldTopoMap")
+        map_obj = folium.Map(location=center, zoom_start=6, tiles="Esri WorldTopoMap", prefer_canvas=True)
         map_obj.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
     else:
-        map_obj = folium.Map(location=[50.0, -85.0], zoom_start=5, tiles="Esri WorldTopoMap")
+        map_obj = folium.Map(location=[50.0, -85.0], zoom_start=5, tiles="Esri WorldTopoMap", prefer_canvas=True)
 
     # Build legend-ordered layer sequence with group metadata
     legend_order = []
@@ -451,7 +513,26 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
             legend_order.append(layer_name)
             layer_to_label[layer_name] = item["label"]
             layer_to_group[layer_name] = group_name
-    
+
+    # Tiered layers ("Name (1)", "Name (2)", ...) share one legend entry for
+    # tier 1; slot the remaining tiers directly after it so they stay
+    # contiguous in the layer control.
+    expanded_order = []
+    for layer_name in legend_order:
+        expanded_order.append(layer_name)
+        tier_match = re.match(r"^(.*) \(1\)$", layer_name)
+        if tier_match:
+            base = re.escape(tier_match.group(1))
+            siblings = [
+                cfg["name"] for cfg in LAYER_CONFIG
+                if cfg["name"] != layer_name
+                and re.match(rf"^{base} \(\d+\)$", cfg["name"])
+            ]
+            expanded_order.extend(
+                sorted(siblings, key=lambda n: int(n.rsplit("(", 1)[1].rstrip(")")))
+            )
+    legend_order = expanded_order
+
     # Create a mapping from layer name to config
     layer_map = {cfg["name"]: cfg for cfg in LAYER_CONFIG}
     
@@ -472,8 +553,8 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
     layer_label_map = {}
     layer_group_map = {}
     for layer_name in legend_order:
-        layer_label_map[layer_name] = layer_to_label[layer_name]
-        layer_group_map[layer_name] = layer_to_group[layer_name]
+        layer_label_map[layer_name] = layer_to_label.get(layer_name, layer_name)
+        layer_group_map[layer_name] = layer_to_group.get(layer_name, "")
     
     layer_label_json = json.dumps(layer_label_map)
     layer_group_json = json.dumps(layer_group_map)
@@ -496,7 +577,7 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
         "    if (!span) return; "
         "    var layerName = span.textContent.trim(); "
         "    var order = legendOrder.indexOf(layerName); "
-        "    if (order >= 0) label.style.order = order; "
+        "    label.style.order = order >= 0 ? order : 1000; "
         "  }); "
         "  return true; "
         "} "
