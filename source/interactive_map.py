@@ -16,12 +16,6 @@ import geopandas as gpd
 # Layer configuration: ordered by zorder for proper stacking.
 LAYER_CONFIG = [
     {
-        "name": "Ontario Boundary",
-        "filename": "Ontario_Provincial_Boundary.geojson",
-        "style_key": "ontario_boundary",
-        "zorder": 0,
-    },
-    {
         "name": "GTA Boundary",
         "filename": "GTA_Boundary.geojson",
         "style_key": "gta_boundary",
@@ -82,12 +76,6 @@ for _tier in range(1, CIMA_OD_TIERS + 1):
 
 # Style palette keyed by style_key in LAYER_CONFIG.
 STYLE_MAP: Dict[str, Dict[str, Any]] = {
-    "ontario_boundary": {
-        "color": "#9a9a9a",
-        "fillColor": "#d9d9d7",
-        "fillOpacity": 0.35,
-        "weight": 1.5,
-    },
     "gta_boundary": {
         "color": "#4f5d73",
         "fillColor": "#c7d3f0",
@@ -155,12 +143,6 @@ STYLE_MAP: Dict[str, Dict[str, Any]] = {
 # Legend items organized by section.
 LEGEND_ITEMS: List[Dict[str, Any]] = [
     {
-        "group": "Of Interest for MHDV Commercial Charging Hub",
-        "items": [
-            {"label": "City Boundaries", "color": "#b80303", "shape": "line", "layer_name": "City Boundaries", "dash": True},
-        ]
-    },
-    {
         "group": "Highly Used by Consortium Members",
         "items": [
             {"label": "Working Group Survey: FSAs", "color": STYLE_MAP["working_group_survey_fsas"]["fillColor"], "shape": "square", "layer_name": "Working Group Survey: FSAs"},
@@ -178,7 +160,7 @@ LEGEND_ITEMS: List[Dict[str, Any]] = [
     {
         "group": "Context",
         "items": [
-            {"label": "Ontario Boundary", "color": STYLE_MAP["ontario_boundary"]["color"], "shape": "square", "layer_name": "Ontario Boundary"},
+            {"label": "City Boundaries", "color": "#b80303", "shape": "line", "layer_name": "City Boundaries", "dash": True},
             {"label": "GTA Boundary", "color": STYLE_MAP["gta_boundary"]["color"], "shape": "square", "layer_name": "GTA Boundary"},
             {"label": "Ontario Freight Corridors", "color": STYLE_MAP["freight_corridors"]["color"], "shape": "line", "layer_name": "Primary Freight Corridors"},
         ]
@@ -420,23 +402,6 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
     geojson_dir = geojson_dir or project_root / "active geojsons"
     output_path = output_path or (project_root / "viewer" / "geojson_viewer.html")
 
-    # Map initialization centered on Ontario boundary if available.
-    boundary_path = geojson_dir / "Ontario_Provincial_Boundary.geojson"
-    if boundary_path.exists():
-        gdf_boundary = gpd.read_file(boundary_path)
-        bounds = gdf_boundary.total_bounds  # minx, miny, maxx, maxy
-        center = [(bounds[1] + bounds[3]) / 2, (bounds[0] + bounds[2]) / 2]
-        map_obj = folium.Map(location=center, zoom_start=6, tiles="Esri WorldTopoMap", prefer_canvas=True)
-        map_obj.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
-    else:
-        map_obj = folium.Map(location=[50.0, -85.0], zoom_start=5, tiles="Esri WorldTopoMap", prefer_canvas=True)
-
-    # City boundaries are now handled as a regular layer in LAYER_CONFIG for proper z-order and toggling
-    script_dir = Path(__file__).parent
-    project_root = script_dir.parent
-    geojson_dir = geojson_dir or project_root / "active geojsons"
-    output_path = output_path or (project_root / "viewer" / "geojson_viewer.html")
-
     # Ensure the destination directory exists so the viewer can be written reliably.
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -452,8 +417,8 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
         geojson_data[cfg["filename"]] = _load_geojson(path)
         print(f"[Load] {cfg['name']} from {path}")
 
-    # Map initialization centered on Ontario boundary if available.
-    boundary_path = geojson_dir / "Ontario_Provincial_Boundary.geojson"
+    # Map initialization centered on the GTA boundary if available.
+    boundary_path = geojson_dir / "GTA_Boundary.geojson"
     if boundary_path.exists():
         gdf_boundary = gpd.read_file(boundary_path)
         bounds = gdf_boundary.total_bounds  # minx, miny, maxx, maxy
