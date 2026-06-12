@@ -16,7 +16,7 @@ import geopandas as gpd
 # Layer configuration: ordered by zorder for proper stacking.
 LAYER_CONFIG = [
     {
-        "name": "GTA Boundary",
+        "name": "OpenData: GTA Boundary",
         "filename": "GTA_Boundary.geojson",
         "style_key": "gta_boundary",
         "zorder": 1,
@@ -28,7 +28,7 @@ LAYER_CONFIG = [
         "zorder": 3,
     },
     {
-        "name": "Primary Freight Corridors",
+        "name": "OpenData: Primary Freight Corridors",
         "filename": "Value_of_Goods_2016_-3795296180828259022.geojson",
         "style_key": "freight_corridors",
         "zorder": 5,
@@ -46,7 +46,7 @@ LAYER_CONFIG = [
         "zorder": 8,
     },
     {
-        "name": "City Boundaries",
+        "name": "OpenData: City Boundaries",
         "filename": "public_charging_cities_boundaries.geojson",
         "style_key": "city_boundaries",
         "zorder": 99,  # Draw on top
@@ -160,9 +160,9 @@ LEGEND_ITEMS: List[Dict[str, Any]] = [
     {
         "group": "Context",
         "items": [
-            {"label": "City Boundaries", "color": "#b80303", "shape": "line", "layer_name": "City Boundaries", "dash": True},
-            {"label": "GTA Boundary", "color": STYLE_MAP["gta_boundary"]["color"], "shape": "square", "layer_name": "GTA Boundary"},
-            {"label": "Ontario Freight Corridors", "color": STYLE_MAP["freight_corridors"]["color"], "shape": "line", "layer_name": "Primary Freight Corridors"},
+            {"label": "OpenData: City Boundaries", "color": "#b80303", "shape": "line", "layer_name": "OpenData: City Boundaries", "dash": True},
+            {"label": "OpenData: GTA Boundary", "color": STYLE_MAP["gta_boundary"]["color"], "shape": "square", "layer_name": "OpenData: GTA Boundary"},
+            {"label": "OpenData: Primary Freight Corridors", "color": STYLE_MAP["freight_corridors"]["color"], "shape": "line", "layer_name": "OpenData: Primary Freight Corridors"},
         ]
     },
 ]
