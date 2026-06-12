@@ -10,15 +10,16 @@ Inputs (defaults point at the raw exports in Downloads):
   - Zone CSVs: ZoneId -> segment LineString geometry and bounding box, used
     for stop-segment shapes and OD endpoints.
 
-Outputs (rank tiers, descending by volume, tier 1 = busiest):
-  - active geojsons/cima_stops_<i>.geojson  All ~64k segments split into
-    tiers of 10,000 by StopCount.
-  - active geojsons/cima_od_<i>.geojson     Top 50,000 zone pairs by JourneyCount in
-    tiers of 10,000, drawn as centroid-to-centroid LineStrings; self-pairs
-    excluded. (The full matrix has millions of pairs and cannot be embedded.)
+Outputs:
+  - active geojsons/cima_stops_heat.geojson  All ~64k segments reduced to
+    their midpoint with StopCount, for heatmap rendering.
+  - active geojsons/cima_od_<i>.geojson      Top 50,000 zone pairs by
+    JourneyCount in rank tiers of 10,000 (tier 1 = busiest), drawn as
+    centroid-to-centroid LineStrings; self-pairs excluded. (The full matrix
+    has millions of pairs and cannot be embedded.)
 
 Each file carries a root-level "scaleMax" (the dataset-wide metric maximum)
-so the map can scale line widths consistently across tiers.
+so the map can scale weights/line widths consistently.
 
 Run as a script (python source/cima_preprocessing.py) or import the builders.
 """
@@ -37,7 +38,6 @@ DEFAULT_ZONES_DIR = DOWNLOADS / "Toronto-zones"
 GEOJSON_DIR = Path(__file__).parent.parent / "active geojsons"
 
 COORD_DECIMALS = 6
-STOP_TIER_SIZE = 10_000
 OD_TOP_N = 50_000
 OD_TIER_SIZE = 10_000
 
@@ -124,50 +124,61 @@ def build_zone_geometry_lookup(
     return lookup
 
 
-def build_stops_geojsons(
+def _segment_midpoint(geometry: dict):
+    """Representative on-road point for a segment: its middle vertex."""
+    coords = geometry.get("coordinates") or []
+    if geometry.get("type") == "MultiLineString":
+        coords = max(coords, key=len) if coords else []
+    if not coords:
+        return None
+    return coords[len(coords) // 2]
+
+
+def build_stops_heatmap_geojson(
     sa_csv: Path = DEFAULT_SA_CSV,
     zones_dir: Path = DEFAULT_ZONES_DIR,
-    out_dir: Path = GEOJSON_DIR,
-    tier_size: int = STOP_TIER_SIZE,
-) -> List[Path]:
-    """All stop-analytics segments, ranked by StopCount, in tier files.
+    out_path: Path = GEOJSON_DIR / "cima_stops_heat.geojson",
+) -> Path:
+    """All stop-analytics segments as StopCount-weighted midpoints.
 
     The stop-analytics export ships with an empty Geography column, so each
-    segment's LineString comes from the zone CSVs, joined on ZoneId.
+    segment's LineString comes from the zone CSVs, joined on ZoneId; the
+    segment midpoint stands in for the segment in the heatmap.
     """
     geometries = build_zone_geometry_lookup(zones_dir)
     print(f"[Stops] Reading {sa_csv}")
-    df = pd.read_csv(sa_csv, usecols=SA_USECOLS, dtype={"ZoneId": str}, engine="c")
-    df = df.sort_values("StopCount", ascending=False)
+    df = pd.read_csv(sa_csv, usecols=["ZoneId", "StopCount"],
+                     dtype={"ZoneId": str}, engine="c")
 
     features = []
     skipped = 0
     for row in df.itertuples(index=False):
         geometry = geometries.get(row.ZoneId)
-        if geometry is None:
+        midpoint = _segment_midpoint(geometry) if geometry else None
+        if midpoint is None:
             skipped += 1
             continue
-        desc = row.ZoneDescription
         features.append({
             "type": "Feature",
-            "geometry": geometry,
-            "properties": {
-                "Road": desc if isinstance(desc, str) and desc else "Unnamed segment",
-                "Road Type": row.ZoneSubType if isinstance(row.ZoneSubType, str) else "",
-                "StopCount": int(row.StopCount),
-                "VehicleCount": int(row.VehicleCount),
-                "DailyStopCountAvg": _num(row.DailyStopCountAvg, 1),
-                "StopDurationAvg (min)": _num(row.StopDurationAvg),
-                "StopDurationMed (min)": _num(row.StopDurationMed),
-                "IdleDurationAvg (min)": _num(row.IdleDurationAvg),
-            },
+            "geometry": {"type": "Point", "coordinates": midpoint},
+            "properties": {"StopCount": int(row.StopCount)},
         })
     if skipped:
         print(f"[Stops] Skipped {skipped} rows with no zone geometry")
-    print(f"[Stops] {len(features)} segments, StopCount "
+    print(f"[Stops] {len(features)} segment midpoints, StopCount "
           f"{df.StopCount.min():.0f} - {df.StopCount.max():.0f}")
-    return _write_tiers(features, out_dir, "cima_stops", tier_size,
-                        scale_max=float(df.StopCount.max()))
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    collection = {
+        "type": "FeatureCollection",
+        "scaleMax": float(df.StopCount.max()),
+        "features": features,
+    }
+    with out_path.open("w", encoding="utf-8") as f:
+        json.dump(collection, f, separators=(",", ":"))
+    print(f"[Write] {len(features)} features -> {out_path} "
+          f"({out_path.stat().st_size / 1024:.0f} KB)")
+    return out_path
 
 
 def build_zone_centroid_lookup(
@@ -269,7 +280,7 @@ def build_od_geojsons(
 
 
 def main():
-    build_stops_geojsons()
+    build_stops_heatmap_geojson()
     build_od_geojsons()
 
 

@@ -6,11 +6,13 @@ an interactive map with layer toggles and a styled legend (QGIS-like stack).
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Dict, Any, List
 
 import folium
+import folium.plugins
 import geopandas as gpd
 
 # Layer configuration: ordered by zorder for proper stacking.
@@ -53,18 +55,17 @@ LAYER_CONFIG = [
     },
 ]
 
-# CIMA+/Geotab layers come in rank tiers (tier 1 = highest volume, produced
-# by cima_preprocessing.py). Only tier 1 of each dataset is shown initially.
-CIMA_STOP_TIERS = 7
+# CIMA+/Geotab layers (produced by cima_preprocessing.py). Stop data renders
+# as a StopCount-weighted heatmap; OD data comes in rank tiers (tier 1 =
+# highest volume), only tier 1 shown initially.
+LAYER_CONFIG.append({
+    "name": "CIMA+ stop data",
+    "filename": "cima_stops_heat.geojson",
+    "style_key": "cima_stops",
+    "zorder": 10,
+    "render": "heatmap",
+})
 CIMA_OD_TIERS = 5
-for _tier in range(1, CIMA_STOP_TIERS + 1):
-    LAYER_CONFIG.append({
-        "name": f"CIMA+ stop data ({_tier})",
-        "filename": f"cima_stops_{_tier}.geojson",
-        "style_key": "cima_stops",
-        "zorder": 10,
-        "show": _tier == 1,
-    })
 for _tier in range(1, CIMA_OD_TIERS + 1):
     LAYER_CONFIG.append({
         "name": f"CIMA+ Origin Destination data ({_tier})",
@@ -153,7 +154,7 @@ LEGEND_ITEMS: List[Dict[str, Any]] = [
     {
         "group": "CIMA+ / Geotab Telematics (Toronto, 2024-09-01 to 09-08)",
         "items": [
-            {"label": "Stop segments, tiers 1-7 by stop count (width = stops)", "color": STYLE_MAP["cima_stops"]["color"], "shape": "line", "layer_name": "CIMA+ stop data (1)"},
+            {"label": "Stop density heatmap (weighted by stop count)", "color": "#e0312c", "shape": "square", "layer_name": "CIMA+ stop data"},
             {"label": "Origin-Destination flows, tiers 1-5 (width = journeys)", "color": STYLE_MAP["cima_od"]["color"], "shape": "line", "layer_name": "CIMA+ Origin Destination data (1)"},
         ]
     },
@@ -268,17 +269,48 @@ def _load_geojson(path: Path) -> Dict[str, Any]:
     return data
 
 
+def _add_heatmap_layer(map_obj: folium.Map, data: Dict[str, Any], name: str,
+                       metric: str, show: bool):
+    """Render point features as a heatmap weighted by a numeric property.
+
+    Weights are log-scaled against the dataset-wide scaleMax so the long
+    tail of low-volume points stays visible without washing out hotspots.
+    """
+    features = data.get("features", [])
+    max_value = data.get("scaleMax") or max(
+        (f.get("properties", {}).get(metric) or 0 for f in features), default=1)
+    log_max = math.log1p(max_value) or 1.0
+    heat_points = []
+    for feat in features:
+        coords = feat.get("geometry", {}).get("coordinates")
+        if not coords or len(coords) < 2:
+            continue
+        value = feat.get("properties", {}).get(metric) or 0
+        heat_points.append(
+            [coords[1], coords[0], math.log1p(value) / log_max])
+    fg = folium.FeatureGroup(name=name, show=show)
+    folium.plugins.HeatMap(
+        heat_points,
+        radius=12,
+        blur=15,
+        min_opacity=0.0,
+    ).add_to(fg)
+    fg.add_to(map_obj)
+
+
 def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dict[str, str], layer_id: str):
     name = layer_cfg["name"]
     style_key = layer_cfg["style_key"]
     zorder = layer_cfg.get("zorder", 0)
     show = layer_cfg.get("show", True)
-    
+
+    if layer_cfg.get("render") == "heatmap":
+        _add_heatmap_layer(map_obj, data, name, "StopCount", show)
+        return
+
     # Use AADTT16-based styling for highway/line layers
     is_highway = style_key in {"working_group_survey_highways", "freight_corridors"}
-    if style_key == "cima_stops":
-        style_fn = _cima_scaled_style_function(style_key, data, "StopCount", 1.0, 6.0)
-    elif style_key == "cima_od":
+    if style_key == "cima_od":
         style_fn = _cima_scaled_style_function(style_key, data, "JourneyCount", 0.8, 7.0)
     elif is_highway:
         style_fn = _highway_style_function(style_key)
