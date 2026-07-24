@@ -16,7 +16,19 @@ import folium.plugins
 import geopandas as gpd
 
 # Layer configuration: ordered by zorder for proper stacking.
+#
+# Layers marked "show": False below were previously removed from the map
+# entirely. They're kept here (data lives in "archived geojsons/") so they
+# stay toggle-able from the layer control instead of requiring code changes
+# to bring back.
 LAYER_CONFIG = [
+    {
+        "name": "Ontario Boundary",
+        "filename": "Ontario_Provincial_Boundary.geojson",
+        "style_key": "ontario_boundary",
+        "zorder": 0,
+        "show": False,
+    },
     {
         "name": "OpenData: GTA Boundary",
         "filename": "GTA_Boundary.geojson",
@@ -24,10 +36,24 @@ LAYER_CONFIG = [
         "zorder": 1,
     },
     {
+        "name": "Pembina FSAs",
+        "filename": "pembina_fsas.geojson",
+        "style_key": "pembina_fsas",
+        "zorder": 2,
+        "show": False,
+    },
+    {
         "name": "Working Group Survey: FSAs",
         "filename": "working_group_survey_fsas.geojson",
         "style_key": "working_group_survey_fsas",
         "zorder": 3,
+    },
+    {
+        "name": "FSAs of Interest for MHDV Commercial Charging Hub",
+        "filename": "public_charging_fsas.geojson",
+        "style_key": "public_charging_fsas",
+        "zorder": 4,
+        "show": False,
     },
     {
         "name": "OpenData: Primary Freight Corridors",
@@ -42,10 +68,24 @@ LAYER_CONFIG = [
         "zorder": 6,
     },
     {
+        "name": "Highways of Interest for MHDV Commercial Charging Hub",
+        "filename": "gta_numbered_highways.geojson",
+        "style_key": "numbered_highways",
+        "zorder": 7,
+        "show": False,
+    },
+    {
         "name": "Working Group Survey: Current Refueling Stops",
         "filename": "refueling_stops.geojson",
         "style_key": "refueling_stops",
         "zorder": 8,
+    },
+    {
+        "name": "Cities of Interest for MHDV Commercial Charging Hub",
+        "filename": "public_charging_cities_points.geojson",
+        "style_key": "public_charging_cities",
+        "zorder": 9,
+        "show": False,
     },
     {
         "name": "OpenData: City Boundaries",
@@ -77,6 +117,12 @@ for _tier in range(1, CIMA_OD_TIERS + 1):
 
 # Style palette keyed by style_key in LAYER_CONFIG.
 STYLE_MAP: Dict[str, Dict[str, Any]] = {
+    "ontario_boundary": {
+        "color": "#9a9a9a",
+        "fillColor": "#d9d9d7",
+        "fillOpacity": 0.35,
+        "weight": 1.5,
+    },
     "gta_boundary": {
         "color": "#4f5d73",
         "fillColor": "#c7d3f0",
@@ -100,6 +146,29 @@ STYLE_MAP: Dict[str, Dict[str, Any]] = {
         "fillColor": "#ffaa33",
         "fillOpacity": 1.0,
         "weight": 0.8,
+    },
+    "pembina_fsas": {
+        "color": "#1f7a45",
+        "fillColor": "#3c9d5e",
+        "fillOpacity": 1.0,
+        "weight": 0.8,
+    },
+    "public_charging_fsas": {
+        "color": "#ff0000",
+        "fillColor": "#ff0000",
+        "fillOpacity": 1.0,
+        "weight": 0.8,
+    },
+    "public_charging_cities": {
+        "color": "#ff0000",
+        "fillColor": "#ff0000",
+        "fillOpacity": 0.9,
+        "radius": 6,
+        "weight": 0.8,
+    },
+    "numbered_highways": {
+        "color": "#ff0000",
+        "weight": 2.0,
     },
     "refueling_stops": {
         "color": "#ffaa33",
@@ -144,6 +213,14 @@ STYLE_MAP: Dict[str, Dict[str, Any]] = {
 # Legend items organized by section.
 LEGEND_ITEMS: List[Dict[str, Any]] = [
     {
+        "group": "Of Interest for MHDV Commercial Charging Hub",
+        "items": [
+            {"label": "Cities", "color": STYLE_MAP["public_charging_cities"]["fillColor"], "shape": "circle", "layer_name": "Cities of Interest for MHDV Commercial Charging Hub"},
+            {"label": "FSAs", "color": STYLE_MAP["public_charging_fsas"]["fillColor"], "shape": "square", "layer_name": "FSAs of Interest for MHDV Commercial Charging Hub"},
+            {"label": "Highways", "color": STYLE_MAP["numbered_highways"]["color"], "shape": "line", "layer_name": "Highways of Interest for MHDV Commercial Charging Hub"},
+        ]
+    },
+    {
         "group": "Highly Used by Consortium Members",
         "items": [
             {"label": "Working Group Survey: FSAs", "color": STYLE_MAP["working_group_survey_fsas"]["fillColor"], "shape": "square", "layer_name": "Working Group Survey: FSAs"},
@@ -159,8 +236,15 @@ LEGEND_ITEMS: List[Dict[str, Any]] = [
         ]
     },
     {
+        "group": "Third-party Results",
+        "items": [
+            {"label": "GTHA Priority Zones from Pembina", "color": STYLE_MAP["pembina_fsas"]["fillColor"], "shape": "square", "layer_name": "Pembina FSAs"},
+        ]
+    },
+    {
         "group": "Context",
         "items": [
+            {"label": "Ontario Boundary", "color": STYLE_MAP["ontario_boundary"]["color"], "shape": "square", "layer_name": "Ontario Boundary"},
             {"label": "OpenData: City Boundaries", "color": "#b80303", "shape": "line", "layer_name": "OpenData: City Boundaries", "dash": True},
             {"label": "OpenData: GTA Boundary", "color": STYLE_MAP["gta_boundary"]["color"], "shape": "square", "layer_name": "OpenData: GTA Boundary"},
             {"label": "OpenData: Primary Freight Corridors", "color": STYLE_MAP["freight_corridors"]["color"], "shape": "line", "layer_name": "OpenData: Primary Freight Corridors"},
@@ -309,7 +393,7 @@ def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dic
         return
 
     # Use AADTT16-based styling for highway/line layers
-    is_highway = style_key in {"working_group_survey_highways", "freight_corridors"}
+    is_highway = style_key in {"working_group_survey_highways", "numbered_highways", "freight_corridors"}
     if style_key == "cima_od":
         style_fn = _cima_scaled_style_function(style_key, data, "JourneyCount", 0.8, 7.0)
     elif is_highway:
@@ -432,6 +516,7 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
     script_dir = Path(__file__).parent
     project_root = script_dir.parent
     geojson_dir = geojson_dir or project_root / "active geojsons"
+    archived_dir = project_root / "archived geojsons"
     output_path = output_path or (project_root / "viewer" / "geojson_viewer.html")
 
     # Ensure the destination directory exists so the viewer can be written reliably.
@@ -443,6 +528,8 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
     geojson_data = {}
     for cfg in LAYER_CONFIG:
         path = geojson_dir / cfg["filename"]
+        if not path.exists():
+            path = archived_dir / cfg["filename"]
         if not path.exists():
             print(f"[Skip] Missing layer {cfg['name']}: {path}")
             continue
