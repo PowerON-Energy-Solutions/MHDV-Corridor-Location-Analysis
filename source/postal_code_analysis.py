@@ -353,7 +353,7 @@ def main():
     script_dir = Path(__file__).parent
     project_root = script_dir.parent
     data_dir = project_root / 'data'
-    geojson_dir = project_root / 'geojsons'
+    geojson_dir = project_root / 'active geojsons'
     
     fsa_shapefile = data_dir / 'lfsa000b21a_e' / 'lfsa000b21a_e.shp'
     postal_codes_csv = data_dir / 'postal_codes.csv'
@@ -400,7 +400,7 @@ def main():
     gdf_fsa_target = filter_fsa_by_postal_codes(gdf_fsa_all, df_postal, gdf_boundary)
 
     # Persist filtered FSAs for downstream use (write to geojsons/ for consistency)
-    target_fsa_geojson = geojson_dir / 'target_fsas.geojson'
+    target_fsa_geojson = geojson_dir / 'working_group_survey_fsas.geojson'
     save_target_fsa_geojson(gdf_fsa_target, target_fsa_geojson)
 
     print("\n5. Loading Pembina FSAs...")
