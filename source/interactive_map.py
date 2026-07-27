@@ -16,6 +16,14 @@ import folium.plugins
 import geopandas as gpd
 import matplotlib as mpl
 
+# Shared blue -> green -> red color scale for every color-based gradient layer
+# (choropleth, line_speed, heatmap), so they're all visually consistent. The
+# matplotlib colormap is registered under this name further down (near
+# _colormap_hex); referenced here as a plain string so LAYER_CONFIG entries
+# don't have to care about import order.
+GRADIENT_NAME = "blue_green_red"
+GRADIENT_STOPS = ["#0000ff", "#00b300", "#ff0000"]  # blue, green, red
+
 # Layer configuration: ordered by zorder for proper stacking.
 #
 # Layers marked "show": False below were previously removed from the map
@@ -149,7 +157,7 @@ LAYER_CONFIG.append({
     "render": "line_speed",
     "width_metric": "PingCount",
     "metric": "AvgSpeedKmh",
-    "colormap": "viridis",
+    "colormap": GRADIENT_NAME,
     "min_weight": 0.5,
     "max_weight": 6.0,
     "unit": " km/h",
@@ -173,7 +181,7 @@ LAYER_CONFIG.append({
     "render": "choropleth",
     "metric": "MedianStopDurationMin",
     "scale": "linear",
-    "colormap": "plasma",
+    "colormap": GRADIENT_NAME,
     "unit": " min",
 })
 LAYER_CONFIG.append({
@@ -421,6 +429,15 @@ def _cima_scaled_style_function(style_key: str, data: Dict[str, Any], metric: st
     return fn
 
 
+try:
+    mpl.colormaps.register(
+        mpl.colors.LinearSegmentedColormap.from_list(GRADIENT_NAME, GRADIENT_STOPS),
+        name=GRADIENT_NAME,
+    )
+except ValueError:
+    pass  # already registered (e.g. build_interactive_map called more than once in-process)
+
+
 def _colormap_hex(colormap: str, t: float) -> str:
     """Sample a matplotlib colormap at t in [0, 1] and return a hex color."""
     t = min(max(t, 0.0), 1.0)
@@ -433,13 +450,12 @@ def _colormap_css_gradient(colormap: str, n: int = 8) -> str:
     return "linear-gradient(to right, " + ", ".join(stops) + ")"
 
 
-# Leaflet.heat's default gradient (blue -> cyan -> lime -> yellow -> red),
-# approximated as evenly-spaced CSS stops for the legend swatch -- the actual
-# plugin fades in from transparent below its low-intensity threshold, which
-# an always-opaque legend bar can't quite reproduce.
-HEATMAP_GRADIENT_CSS = (
-    "linear-gradient(to right, #0000ff 0%, #00ffff 35%, #00ff00 55%, #ffff00 75%, #ff0000 100%)"
-)
+# The heatmap layers (leaflet.heat) use the same blue-green-red scale, passed
+# explicitly as the plugin's `gradient` option (see _add_heatmap_layer) rather
+# than leaflet's own default -- so the legend bar and the actual map rendering
+# are guaranteed to match, not just visually similar.
+HEATMAP_GRADIENT = {0.0: GRADIENT_STOPS[0], 0.5: GRADIENT_STOPS[1], 1.0: GRADIENT_STOPS[2]}
+HEATMAP_GRADIENT_CSS = _colormap_css_gradient(GRADIENT_NAME)
 
 
 def _format_number(value: float) -> str:
@@ -459,15 +475,24 @@ def _color_bar_html(gradient_css: str, vmin: float, vmax: float, unit: str) -> s
 
 
 def _width_bar_html(color: str, vmin: float, vmax: float, unit: str) -> str:
+    """A single wedge tapering from thin (left) to thick (right), same label
+    format as the color bars -- one shape rather than two separate samples.
+    """
+    svg_w, svg_h = 150, 16
+    min_h, max_h = 2, 12
+    mid = svg_h / 2
+    points = (
+        f"0,{mid - min_h / 2} {svg_w},{mid - max_h / 2} "
+        f"{svg_w},{mid + max_h / 2} 0,{mid + min_h / 2}"
+    )
     return (
-        "<div style='display:flex;flex-direction:column;gap:3px;'>"
-        "<div style='display:flex;align-items:center;gap:5px;'>"
-        f"<div style='width:40px;height:1px;background:{color};'></div>"
-        f"<span style='font-size:9px;color:#666;'>{_format_number(vmin)}{unit}</span></div>"
-        "<div style='display:flex;align-items:center;gap:5px;'>"
-        f"<div style='width:40px;height:4.5px;background:{color};'></div>"
-        f"<span style='font-size:9px;color:#666;'>{_format_number(vmax)}{unit}</span></div>"
-        "</div>"
+        "<div>"
+        f"<svg width='{svg_w}' height='{svg_h}' style='display:block;'>"
+        f"<polygon points='{points}' fill='{color}' /></svg>"
+        f"<div style='display:flex;justify-content:space-between;width:{svg_w}px;"
+        "font-size:9px;color:#666;margin-top:1px;'>"
+        f"<span>{_format_number(vmin)}{unit}</span><span>{_format_number(vmax)}{unit}</span>"
+        "</div></div>"
     )
 
 
@@ -645,6 +670,7 @@ def _add_heatmap_layer(map_obj: folium.Map, data: Dict[str, Any], name: str,
         radius=12,
         blur=15,
         min_opacity=0.0,
+        gradient=HEATMAP_GRADIENT,
     ).add_to(fg)
     fg.add_to(map_obj)
 
@@ -739,7 +765,7 @@ def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dic
     return
 
 
-def _add_legend(map_obj: folium.Map):
+def _add_legend(map_obj: folium.Map, layer_map: Dict[str, Any], geojson_data: Dict[str, Any]):
     # Build a grouped legend with section headers.
     legend_html_sections = []
 
@@ -767,14 +793,33 @@ def _add_legend(map_obj: folium.Map):
                     marker_html = f"<span style='display:inline-block;width:18px;height:3px;background:{color};margin-right:6px;'></span>"
             else:  # square / polygon
                 marker_html = f"<span style='display:inline-block;width:12px;height:12px;background:{color};margin-right:6px;border:1px solid #555;'></span>"
+
+            # Gradient/width bar, shown only while this layer is actually
+            # checked in the layer control (see syncLegendWithLayerControl),
+            # not just always-visible like the swatch+label above it.
+            bar_html = ""
+            cfg = layer_map.get(layer_name)
+            if cfg:
+                data = geojson_data.get(cfg["filename"])
+                if data:
+                    bar = _gradient_bar_html(cfg, data)
+                    if bar:
+                        show = cfg.get("show", True)
+                        bar_html = (
+                            f"<div class='gradient-bar-entry' data-layer-name='{layer_name}' "
+                            f"style='display:{'block' if show else 'none'};margin:2px 0 4px 18px;'>{bar}</div>"
+                        )
+
             legend_html_sections.append(
                 f"<div class='legend-entry' data-layer-name='{layer_name}' "
-                f"style='margin:2px 0;display:flex;align-items:center;padding:3px 0;' >"
+                f"style='margin:2px 0;padding:3px 0;' >"
+                f"<div style='display:flex;align-items:center;'>"
                 f"{marker_html}<span style='font-size:11px;color:#333;user-select:none;'>{label}</span></div>"
+                f"{bar_html}</div>"
             )
 
     sections_str = "".join(legend_html_sections)
-    
+
     # Build legend HTML with proper structure
     legend_div = (
         "<div id='map-legend' style='position:fixed;bottom:20px;left:20px;z-index:9999;"
@@ -783,53 +828,8 @@ def _add_legend(map_obj: folium.Map):
         f"{sections_str}"
         "</div>"
     )
-    
+
     map_obj.get_root().html.add_child(folium.Element(legend_div))
-
-
-def _add_gradient_bar_panel(
-    map_obj: folium.Map,
-    legend_order: List[str],
-    layer_map: Dict[str, Any],
-    geojson_data: Dict[str, Any],
-    layer_to_label: Dict[str, str],
-):
-    """Bottom-right panel of color/line-width bars, one per gradient-rendered
-    layer that has a real value range (see _gradient_bar_html). Each entry
-    starts hidden unless its layer is shown by default; entry_sync_script
-    (in build_interactive_map) then shows/hides them to track the actual
-    layer-control checkboxes, and hides the whole panel when nothing
-    gradient-rendered is currently visible.
-    """
-    entries = []
-    for layer_name in legend_order:
-        cfg = layer_map.get(layer_name)
-        if not cfg:
-            continue
-        data = geojson_data.get(cfg["filename"])
-        if not data:
-            continue
-        bar_html = _gradient_bar_html(cfg, data)
-        if not bar_html:
-            continue
-        label = layer_to_label.get(layer_name, layer_name)
-        show = cfg.get("show", True)
-        entries.append(
-            f"<div class='gradient-bar-entry' data-layer-name='{layer_name}' "
-            f"style='display:{'block' if show else 'none'};margin:0 0 8px 0;'>"
-            f"<div style='font-size:10px;color:#333;margin-bottom:2px;'>{label}</div>"
-            f"{bar_html}</div>"
-        )
-
-    panel_html = (
-        "<div id='map-gradient-bars' style='position:fixed;bottom:20px;right:20px;z-index:9999;"
-        "background:rgba(255,255,255,0.95);padding:10px 12px;border:1px solid #ccc;border-radius:6px;"
-        "box-shadow:0 2px 6px rgba(0,0,0,0.3);max-width:200px;font-family:Arial,sans-serif;"
-        "display:none;'>"
-        + "".join(entries) +
-        "</div>"
-    )
-    map_obj.get_root().html.add_child(folium.Element(panel_html))
 
 
 def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | None = None) -> Path:
@@ -910,8 +910,7 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
             continue
         _add_geojson_layer(map_obj, data, cfg, f"layer_{cfg['zorder']}")
 
-    _add_legend(map_obj)
-    _add_gradient_bar_panel(map_obj, legend_order, layer_map, geojson_data, layer_to_label)
+    _add_legend(map_obj, layer_map, geojson_data)
     
     # Add Folium's built-in layer control (will work out of the box with proper styling)
     folium.LayerControl(collapsed=False, position='topright').add_to(map_obj)
@@ -961,14 +960,9 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
         "  document.querySelectorAll('.legend-entry').forEach(function(entry) { "
         "    entry.style.opacity = checkedLayers.has(entry.getAttribute('data-layer-name')) ? '1' : '0.5'; "
         "  }); "
-        "  var anyBarVisible = false; "
         "  document.querySelectorAll('.gradient-bar-entry').forEach(function(entry) { "
-        "    var visible = checkedLayers.has(entry.getAttribute('data-layer-name')); "
-        "    entry.style.display = visible ? 'block' : 'none'; "
-        "    if (visible) anyBarVisible = true; "
+        "    entry.style.display = checkedLayers.has(entry.getAttribute('data-layer-name')) ? 'block' : 'none'; "
         "  }); "
-        "  var barPanel = document.getElementById('map-gradient-bars'); "
-        "  if (barPanel) barPanel.style.display = anyBarVisible ? 'block' : 'none'; "
         "} "
         "function initLegendSync() { "
         "  if (!document.querySelector('.leaflet-control-layers')) { "
