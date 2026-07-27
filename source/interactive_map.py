@@ -123,25 +123,27 @@ for _tier in range(1, CIMA_OD_TIERS + 1):
 # heatmap above, so they read as the same kind of smoothed 2D surface.
 LAYER_CONFIG.append({
     "name": "Volvo Ping Density",
-    "filename": "volvo_coverage.geojson",
-    "style_key": "volvo_coverage",
+    "filename": "volvo_ping_edges.geojson",
+    "style_key": "volvo_ping_density",
     "zorder": 12,
     "show": False,
-    "render": "choropleth",
+    "render": "line_width",
     "metric": "PingCount",
-    "scale": "log",
-    "colormap": "inferno",
+    "min_weight": 0.5,
+    "max_weight": 6.0,
 })
 LAYER_CONFIG.append({
     "name": "Volvo Average Speed",
-    "filename": "volvo_speed.geojson",
+    "filename": "volvo_ping_edges.geojson",
     "style_key": "volvo_speed",
     "zorder": 13,
     "show": False,
-    "render": "choropleth",
+    "render": "line_speed",
+    "width_metric": "PingCount",
     "metric": "AvgSpeedKmh",
-    "scale": "linear",
     "colormap": "viridis",
+    "min_weight": 0.5,
+    "max_weight": 6.0,
 })
 LAYER_CONFIG.append({
     "name": "Volvo Stop Density",
@@ -154,12 +156,14 @@ LAYER_CONFIG.append({
 })
 LAYER_CONFIG.append({
     "name": "Volvo Stop Duration",
-    "filename": "volvo_stop_duration_heat.geojson",
-    "style_key": "volvo_heat",
+    "filename": "volvo_stop_duration.geojson",
+    "style_key": "volvo_stop_duration",
     "zorder": 15,
     "show": False,
-    "render": "heatmap",
-    "heatmap_metric": "StopDurationMin",
+    "render": "choropleth",
+    "metric": "MedianStopDurationMin",
+    "scale": "linear",
+    "colormap": "plasma",
 })
 LAYER_CONFIG.append({
     "name": "Volvo Regular Ping Locations",
@@ -264,6 +268,10 @@ STYLE_MAP: Dict[str, Dict[str, Any]] = {
         "weight": 1.5,
         "opacity": 0.6,
     },
+    "volvo_ping_density": {
+        "color": "#1f78b4",
+        "opacity": 0.85,
+    },
 }
 
 # Legend items organized by section.
@@ -294,10 +302,10 @@ LEGEND_ITEMS: List[Dict[str, Any]] = [
     {
         "group": "Volvo Telematics (GTA fleet)",
         "items": [
-            {"label": "Ping Density (log-scaled)", "color": "#cc4248", "shape": "square", "layer_name": "Volvo Ping Density"},
-            {"label": "Average Speed (km/h)", "color": "#21918c", "shape": "square", "layer_name": "Volvo Average Speed"},
+            {"label": "Ping Density (line width = ping count)", "color": "#1f78b4", "shape": "line", "layer_name": "Volvo Ping Density"},
+            {"label": "Average Speed (line width = ping count, color = speed)", "color": "#21918c", "shape": "line", "layer_name": "Volvo Average Speed"},
             {"label": "Stop Density heatmap", "color": "#e0312c", "shape": "square", "layer_name": "Volvo Stop Density"},
-            {"label": "Average Stop Duration heatmap", "color": "#e0312c", "shape": "square", "layer_name": "Volvo Stop Duration"},
+            {"label": "Median Stop Duration (grid)", "color": "#e16462", "shape": "square", "layer_name": "Volvo Stop Duration"},
             {"label": "Regular Corridor/Stop Locations (>=3 visits/week)", "color": "#e0312c", "shape": "square", "layer_name": "Volvo Regular Ping Locations"},
         ]
     },
@@ -445,6 +453,48 @@ def _choropleth_style_function(layer_cfg: Dict[str, Any], data: Dict[str, Any]):
     return fn
 
 
+def _speed_scaled_line_style_function(layer_cfg: Dict[str, Any], data: Dict[str, Any]):
+    """Line style for the average-speed layer: width scales with PingCount
+    (same edges/scale as the ping-density line layer), color is sampled from
+    a matplotlib colormap based on that edge's AvgSpeedKmh.
+    """
+    width_metric = layer_cfg.get("width_metric", "PingCount")
+    color_metric = layer_cfg.get("metric", "AvgSpeedKmh")
+    colormap = layer_cfg.get("colormap", "viridis")
+    min_weight = layer_cfg.get("min_weight", 1.0)
+    max_weight = layer_cfg.get("max_weight", 6.0)
+
+    features = data.get("features", [])
+    max_width = data.get("scaleMax") or max(
+        (f.get("properties", {}).get(width_metric) or 0 for f in features), default=1)
+    cmin = data.get("speedMin")
+    cmax = data.get("speedMax")
+    if cmin is None or cmax is None:
+        values = [f.get("properties", {}).get(color_metric) for f in features]
+        values = [v for v in values if v is not None]
+        cmin = min(values) if values else 0.0
+        cmax = max(values) if values else 1.0
+    crange = (cmax - cmin) or 1.0
+
+    def fn(feature):
+        props = feature.get("properties", {})
+        width_value = props.get(width_metric) or 0
+        frac = float(width_value) / max_width if max_width else 0.0
+        color_value = props.get(color_metric)
+        t = (color_value - cmin) / crange if color_value is not None else 0.0
+        color = _colormap_hex(colormap, t)
+        return {
+            "color": color,
+            "fillColor": color,
+            "fillOpacity": 0.0,
+            "opacity": 0.85,
+            "weight": min_weight + (max_weight - min_weight) * frac,
+            "dashArray": None,
+        }
+
+    return fn
+
+
 def _load_geojson(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
@@ -507,6 +557,13 @@ def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dic
     is_highway = style_key in {"working_group_survey_highways", "numbered_highways", "freight_corridors"}
     if layer_cfg.get("render") == "choropleth":
         style_fn = _choropleth_style_function(layer_cfg, data)
+    elif layer_cfg.get("render") == "line_width":
+        style_fn = _cima_scaled_style_function(
+            style_key, data, layer_cfg.get("metric", "value"),
+            layer_cfg.get("min_weight", 1.0), layer_cfg.get("max_weight", 6.0),
+        )
+    elif layer_cfg.get("render") == "line_speed":
+        style_fn = _speed_scaled_line_style_function(layer_cfg, data)
     elif style_key == "cima_od":
         style_fn = _cima_scaled_style_function(style_key, data, "JourneyCount", 0.8, 7.0)
     elif is_highway:
