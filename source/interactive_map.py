@@ -489,33 +489,15 @@ def _color_bar_html(gradient_css: str, vmin: float, vmax: float, unit: str) -> s
     )
 
 
-def _width_bar_html(color: str, vmin: float, vmax: float, unit: str) -> str:
-    """A single wedge tapering from thin (left) to thick (right), same label
-    format as the color bars -- one shape rather than two separate samples.
-    """
-    svg_w, svg_h = 150, 16
-    min_h, max_h = 2, 12
-    mid = svg_h / 2
-    points = (
-        f"0,{mid - min_h / 2} {svg_w},{mid - max_h / 2} "
-        f"{svg_w},{mid + max_h / 2} 0,{mid + min_h / 2}"
-    )
-    return (
-        "<div>"
-        f"<svg width='{svg_w}' height='{svg_h}' style='display:block;'>"
-        f"<polygon points='{points}' fill='{color}' /></svg>"
-        f"<div style='display:flex;justify-content:space-between;width:{svg_w}px;"
-        "font-size:9px;color:#666;margin-top:1px;'>"
-        f"<span>{_format_number(vmin)}{unit}</span><span>{_format_number(vmax)}{unit}</span>"
-        "</div></div>"
-    )
-
-
 def _gradient_bar_html(layer_cfg: Dict[str, Any], data: Dict[str, Any]) -> Optional[str]:
-    """Bottom-left legend bar (color gradient or line-width sample) showing
-    what a gradient-rendered layer's min/max actually represent. Returns None
-    for layers with no real value range (e.g. a heatmap where every point
-    carries the same constant weight) since there's nothing informative to show.
+    """Bottom-left legend color bar showing what a gradient-rendered layer's
+    min/max actually represent. Returns None for layers with no real value
+    range (e.g. a heatmap where every point carries the same constant weight)
+    since there's nothing informative to show, and for "line_width" layers --
+    line weight there is in on-screen pixels and doesn't correspond to a fixed
+    real-world scale (it looks different at different zoom levels), so a
+    static width indicator would be misleading; only color-based gradients
+    get a bar.
     """
     render = layer_cfg.get("render")
     unit = layer_cfg.get("unit", "")
@@ -535,13 +517,6 @@ def _gradient_bar_html(layer_cfg: Dict[str, Any], data: Dict[str, Any]) -> Optio
         if vmin == vmax:
             return None
         return _color_bar_html(_colormap_css_gradient(layer_cfg.get("colormap", "viridis")), vmin, vmax, unit)
-
-    if render == "line_width":
-        vmin, vmax = value_range(layer_cfg.get("metric", "value"), "scaleMax")
-        if vmin == vmax:
-            return None
-        color = STYLE_MAP.get(layer_cfg["style_key"], {}).get("color", "#444")
-        return _width_bar_html(color, vmin, vmax, unit)
 
     if render == "line_speed":
         metric = layer_cfg.get("metric", "AvgSpeedKmh")
