@@ -14,6 +14,7 @@ from typing import Dict, Any, List
 import folium
 import folium.plugins
 import geopandas as gpd
+import matplotlib as mpl
 
 # Layer configuration: ordered by zorder for proper stacking.
 #
@@ -114,6 +115,61 @@ for _tier in range(1, CIMA_OD_TIERS + 1):
         "zorder": 11,
         "show": _tier == 1,
     })
+
+# Volvo telematics layers (produced by volvo_geojson_export.py). Coverage and
+# speed are flat-colored grid cells ("choropleth": no interpolation between
+# cells, same look as the source hexbin plots); the rest are point layers
+# rendered as leaflet.heat layers, same mechanism/gradient as the CIMA+ stop
+# heatmap above, so they read as the same kind of smoothed 2D surface.
+LAYER_CONFIG.append({
+    "name": "Volvo Ping Density",
+    "filename": "volvo_coverage.geojson",
+    "style_key": "volvo_coverage",
+    "zorder": 12,
+    "show": False,
+    "render": "choropleth",
+    "metric": "PingCount",
+    "scale": "log",
+    "colormap": "inferno",
+})
+LAYER_CONFIG.append({
+    "name": "Volvo Average Speed",
+    "filename": "volvo_speed.geojson",
+    "style_key": "volvo_speed",
+    "zorder": 13,
+    "show": False,
+    "render": "choropleth",
+    "metric": "AvgSpeedKmh",
+    "scale": "linear",
+    "colormap": "viridis",
+})
+LAYER_CONFIG.append({
+    "name": "Volvo Stop Density",
+    "filename": "volvo_stop_density_heat.geojson",
+    "style_key": "volvo_heat",
+    "zorder": 14,
+    "show": False,
+    "render": "heatmap",
+    "heatmap_metric": "StopCount",
+})
+LAYER_CONFIG.append({
+    "name": "Volvo Stop Duration",
+    "filename": "volvo_stop_duration_heat.geojson",
+    "style_key": "volvo_heat",
+    "zorder": 15,
+    "show": False,
+    "render": "heatmap",
+    "heatmap_metric": "StopDurationMin",
+})
+LAYER_CONFIG.append({
+    "name": "Volvo Regular Ping Locations",
+    "filename": "volvo_regular_ping_locations_heat.geojson",
+    "style_key": "volvo_heat",
+    "zorder": 16,
+    "show": False,
+    "render": "heatmap",
+    "heatmap_metric": "RegularVehicles",
+})
 
 # Style palette keyed by style_key in LAYER_CONFIG.
 STYLE_MAP: Dict[str, Dict[str, Any]] = {
@@ -236,6 +292,16 @@ LEGEND_ITEMS: List[Dict[str, Any]] = [
         ]
     },
     {
+        "group": "Volvo Telematics (GTA fleet)",
+        "items": [
+            {"label": "Ping Density (log-scaled)", "color": "#cc4248", "shape": "square", "layer_name": "Volvo Ping Density"},
+            {"label": "Average Speed (km/h)", "color": "#21918c", "shape": "square", "layer_name": "Volvo Average Speed"},
+            {"label": "Stop Density heatmap", "color": "#e0312c", "shape": "square", "layer_name": "Volvo Stop Density"},
+            {"label": "Average Stop Duration heatmap", "color": "#e0312c", "shape": "square", "layer_name": "Volvo Stop Duration"},
+            {"label": "Regular Corridor/Stop Locations (>=3 visits/week)", "color": "#e0312c", "shape": "square", "layer_name": "Volvo Regular Ping Locations"},
+        ]
+    },
+    {
         "group": "Third-party Results",
         "items": [
             {"label": "GTHA Priority Zones from Pembina", "color": STYLE_MAP["pembina_fsas"]["fillColor"], "shape": "square", "layer_name": "Pembina FSAs"},
@@ -335,6 +401,50 @@ def _cima_scaled_style_function(style_key: str, data: Dict[str, Any], metric: st
     return fn
 
 
+def _colormap_hex(colormap: str, t: float) -> str:
+    """Sample a matplotlib colormap at t in [0, 1] and return a hex color."""
+    t = min(max(t, 0.0), 1.0)
+    return mpl.colors.to_hex(mpl.colormaps[colormap](t))
+
+
+def _choropleth_style_function(layer_cfg: Dict[str, Any], data: Dict[str, Any]):
+    """Style function for flat-colored grid-cell polygons (no interpolation
+    between cells -- each feature gets its own solid fill from a matplotlib
+    colormap, sampled directly from that cell's value, log- or linear-scaled).
+    """
+    metric = layer_cfg.get("metric", "value")
+    scale = layer_cfg.get("scale", "linear")
+    colormap = layer_cfg.get("colormap", "viridis")
+
+    features = data.get("features", [])
+    values = [f.get("properties", {}).get(metric) for f in features]
+    values = [v for v in values if v is not None]
+    vmax = data.get("scaleMax")
+    if vmax is None:
+        vmax = max(values) if values else 1.0
+    vmin = min(values) if values else 0.0
+
+    def transform(v):
+        return math.log1p(max(v, 0)) if scale == "log" else v
+
+    tmin, tmax = transform(vmin), transform(vmax)
+    trange = (tmax - tmin) or 1.0
+
+    def fn(feature):
+        value = feature.get("properties", {}).get(metric)
+        frac = (transform(value) - tmin) / trange if value is not None else 0.0
+        return {
+            "color": "#333333",
+            "fillColor": _colormap_hex(colormap, frac),
+            "fillOpacity": 0.8,
+            "opacity": 0.15,
+            "weight": 0.3,
+            "dashArray": None,
+        }
+
+    return fn
+
+
 def _load_geojson(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
@@ -389,12 +499,15 @@ def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dic
     show = layer_cfg.get("show", True)
 
     if layer_cfg.get("render") == "heatmap":
-        _add_heatmap_layer(map_obj, data, name, "StopCount", show)
+        metric = layer_cfg.get("heatmap_metric", "StopCount")
+        _add_heatmap_layer(map_obj, data, name, metric, show)
         return
 
     # Use AADTT16-based styling for highway/line layers
     is_highway = style_key in {"working_group_survey_highways", "numbered_highways", "freight_corridors"}
-    if style_key == "cima_od":
+    if layer_cfg.get("render") == "choropleth":
+        style_fn = _choropleth_style_function(layer_cfg, data)
+    elif style_key == "cima_od":
         style_fn = _cima_scaled_style_function(style_key, data, "JourneyCount", 0.8, 7.0)
     elif is_highway:
         style_fn = _highway_style_function(style_key)
