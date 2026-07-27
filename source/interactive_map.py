@@ -448,10 +448,10 @@ def _format_number(value: float) -> str:
 
 def _color_bar_html(gradient_css: str, vmin: float, vmax: float, unit: str) -> str:
     return (
-        "<div style='margin:3px 0 4px 18px;'>"
-        f"<div style='width:120px;height:9px;border-radius:2px;border:1px solid #999;"
+        "<div>"
+        f"<div style='width:150px;height:10px;border-radius:2px;border:1px solid #999;"
         f"background:{gradient_css};'></div>"
-        "<div style='display:flex;justify-content:space-between;width:120px;"
+        "<div style='display:flex;justify-content:space-between;width:150px;"
         "font-size:9px;color:#666;margin-top:1px;'>"
         f"<span>{_format_number(vmin)}{unit}</span><span>{_format_number(vmax)}{unit}</span>"
         "</div></div>"
@@ -460,12 +460,12 @@ def _color_bar_html(gradient_css: str, vmin: float, vmax: float, unit: str) -> s
 
 def _width_bar_html(color: str, vmin: float, vmax: float, unit: str) -> str:
     return (
-        "<div style='margin:3px 0 4px 18px;display:flex;flex-direction:column;gap:3px;'>"
+        "<div style='display:flex;flex-direction:column;gap:3px;'>"
         "<div style='display:flex;align-items:center;gap:5px;'>"
-        f"<div style='width:36px;height:1px;background:{color};'></div>"
+        f"<div style='width:40px;height:1px;background:{color};'></div>"
         f"<span style='font-size:9px;color:#666;'>{_format_number(vmin)}{unit}</span></div>"
         "<div style='display:flex;align-items:center;gap:5px;'>"
-        f"<div style='width:36px;height:4.5px;background:{color};'></div>"
+        f"<div style='width:40px;height:4.5px;background:{color};'></div>"
         f"<span style='font-size:9px;color:#666;'>{_format_number(vmax)}{unit}</span></div>"
         "</div>"
     )
@@ -739,7 +739,7 @@ def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dic
     return
 
 
-def _add_legend(map_obj: folium.Map, layer_map: Dict[str, Any], geojson_data: Dict[str, Any]):
+def _add_legend(map_obj: folium.Map):
     # Build a grouped legend with section headers.
     legend_html_sections = []
 
@@ -767,20 +767,10 @@ def _add_legend(map_obj: folium.Map, layer_map: Dict[str, Any], geojson_data: Di
                     marker_html = f"<span style='display:inline-block;width:18px;height:3px;background:{color};margin-right:6px;'></span>"
             else:  # square / polygon
                 marker_html = f"<span style='display:inline-block;width:12px;height:12px;background:{color};margin-right:6px;border:1px solid #555;'></span>"
-
-            bar_html = ""
-            cfg = layer_map.get(layer_name)
-            if cfg:
-                data = geojson_data.get(cfg["filename"])
-                if data:
-                    bar_html = _gradient_bar_html(cfg, data) or ""
-
             legend_html_sections.append(
                 f"<div class='legend-entry' data-layer-name='{layer_name}' "
-                f"style='margin:2px 0;padding:3px 0;' >"
-                f"<div style='display:flex;align-items:center;'>"
+                f"style='margin:2px 0;display:flex;align-items:center;padding:3px 0;' >"
                 f"{marker_html}<span style='font-size:11px;color:#333;user-select:none;'>{label}</span></div>"
-                f"{bar_html}</div>"
             )
 
     sections_str = "".join(legend_html_sections)
@@ -795,6 +785,51 @@ def _add_legend(map_obj: folium.Map, layer_map: Dict[str, Any], geojson_data: Di
     )
     
     map_obj.get_root().html.add_child(folium.Element(legend_div))
+
+
+def _add_gradient_bar_panel(
+    map_obj: folium.Map,
+    legend_order: List[str],
+    layer_map: Dict[str, Any],
+    geojson_data: Dict[str, Any],
+    layer_to_label: Dict[str, str],
+):
+    """Bottom-right panel of color/line-width bars, one per gradient-rendered
+    layer that has a real value range (see _gradient_bar_html). Each entry
+    starts hidden unless its layer is shown by default; entry_sync_script
+    (in build_interactive_map) then shows/hides them to track the actual
+    layer-control checkboxes, and hides the whole panel when nothing
+    gradient-rendered is currently visible.
+    """
+    entries = []
+    for layer_name in legend_order:
+        cfg = layer_map.get(layer_name)
+        if not cfg:
+            continue
+        data = geojson_data.get(cfg["filename"])
+        if not data:
+            continue
+        bar_html = _gradient_bar_html(cfg, data)
+        if not bar_html:
+            continue
+        label = layer_to_label.get(layer_name, layer_name)
+        show = cfg.get("show", True)
+        entries.append(
+            f"<div class='gradient-bar-entry' data-layer-name='{layer_name}' "
+            f"style='display:{'block' if show else 'none'};margin:0 0 8px 0;'>"
+            f"<div style='font-size:10px;color:#333;margin-bottom:2px;'>{label}</div>"
+            f"{bar_html}</div>"
+        )
+
+    panel_html = (
+        "<div id='map-gradient-bars' style='position:fixed;bottom:20px;right:20px;z-index:9999;"
+        "background:rgba(255,255,255,0.95);padding:10px 12px;border:1px solid #ccc;border-radius:6px;"
+        "box-shadow:0 2px 6px rgba(0,0,0,0.3);max-width:200px;font-family:Arial,sans-serif;"
+        "display:none;'>"
+        + "".join(entries) +
+        "</div>"
+    )
+    map_obj.get_root().html.add_child(folium.Element(panel_html))
 
 
 def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | None = None) -> Path:
@@ -875,7 +910,8 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
             continue
         _add_geojson_layer(map_obj, data, cfg, f"layer_{cfg['zorder']}")
 
-    _add_legend(map_obj, layer_map, geojson_data)
+    _add_legend(map_obj)
+    _add_gradient_bar_panel(map_obj, legend_order, layer_map, geojson_data, layer_to_label)
     
     # Add Folium's built-in layer control (will work out of the box with proper styling)
     folium.LayerControl(collapsed=False, position='topright').add_to(map_obj)
@@ -925,6 +961,14 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
         "  document.querySelectorAll('.legend-entry').forEach(function(entry) { "
         "    entry.style.opacity = checkedLayers.has(entry.getAttribute('data-layer-name')) ? '1' : '0.5'; "
         "  }); "
+        "  var anyBarVisible = false; "
+        "  document.querySelectorAll('.gradient-bar-entry').forEach(function(entry) { "
+        "    var visible = checkedLayers.has(entry.getAttribute('data-layer-name')); "
+        "    entry.style.display = visible ? 'block' : 'none'; "
+        "    if (visible) anyBarVisible = true; "
+        "  }); "
+        "  var barPanel = document.getElementById('map-gradient-bars'); "
+        "  if (barPanel) barPanel.style.display = anyBarVisible ? 'block' : 'none'; "
         "} "
         "function initLegendSync() { "
         "  if (!document.querySelector('.leaflet-control-layers')) { "
