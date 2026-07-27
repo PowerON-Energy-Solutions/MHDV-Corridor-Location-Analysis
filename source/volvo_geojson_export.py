@@ -51,11 +51,20 @@ from volvo_telematics_analysis import (
 GEOJSON_DIR = PROJECT_ROOT / "active geojsons"
 COORD_DECIMALS = 6
 
-# Grid cell size for the choropleth/edge (non-smoothed) layers -- finer than
-# the STOP_LOCATION_GRID_KM clustering grid, since these are meant to
-# reproduce the original hexbin plots' resolution, not to group distinct
-# sites together.
+# Grid cell size for the stop-duration choropleth -- finer than the
+# STOP_LOCATION_GRID_KM clustering grid, since it's meant to reproduce the
+# original hexbin plot's resolution, not to group distinct sites together.
 CHOROPLETH_GRID_KM = 0.5
+# Grid cell size for snapping ping-edge endpoints (build_ping_edges). Most
+# consecutive-ping hops turn out to be very short (median ~1m -- the fleet is
+# mostly idling, not driving, between SCHED pings), so at the finer
+# CHOROPLETH_GRID_KM resolution most surviving (non-same-cell) edges are just
+# GPS jitter drifting across a cell boundary while stationary, each snapping
+# to a different pair of neighbors -- not real shared road usage. A coarser
+# grid here is a deliberate "proximity" requirement: two trips only merge
+# into one edge if they cover roughly the same stretch of road, not the same
+# few meters.
+EDGE_GRID_KM = 1.5
 
 
 def _round(value: float) -> float:
@@ -97,7 +106,7 @@ def _write_geojson(collection: dict, out_path: Path) -> Path:
 
 # ---------- Line edge layer (ping density, average speed) ----------
 
-def build_ping_edges(df: pd.DataFrame, grid_km: float = CHOROPLETH_GRID_KM):
+def build_ping_edges(df: pd.DataFrame, grid_km: float = EDGE_GRID_KM):
     """One row per undirected grid-cell-to-cell edge, connecting consecutive-
     in-time pings from the same vehicle.
 

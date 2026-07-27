@@ -20,9 +20,12 @@ import matplotlib as mpl
 # (choropleth, line_speed, heatmap), so they're all visually consistent. The
 # matplotlib colormap is registered under this name further down (near
 # _colormap_hex); referenced here as a plain string so LAYER_CONFIG entries
-# don't have to care about import order.
-GRADIENT_NAME = "blue_green_red"
-GRADIENT_STOPS = ["#0000ff", "#00b300", "#ff0000"]  # blue, green, red
+# don't have to care about import order. Matches leaflet.heat's own default
+# gradient (the look the original CIMA+ stop data heatmap has always had:
+# {0.4: blue, 0.6: cyan, 0.7: lime, 0.8: yellow, 1.0: red}), evenly respaced
+# here since these stops feed a full 0-1 value range, not a heat intensity.
+GRADIENT_NAME = "leaflet_heat_default"
+GRADIENT_STOPS = ["blue", "cyan", "lime", "yellow", "red"]
 
 # Layer configuration: ordered by zorder for proper stacking.
 #
@@ -146,6 +149,7 @@ LAYER_CONFIG.append({
     "metric": "PingCount",
     "min_weight": 0.5,
     "max_weight": 6.0,
+    "scale": "log",
     "unit": " pings",
 })
 LAYER_CONFIG.append({
@@ -156,6 +160,7 @@ LAYER_CONFIG.append({
     "show": False,
     "render": "line_speed",
     "width_metric": "PingCount",
+    "width_scale": "log",
     "metric": "AvgSpeedKmh",
     "colormap": GRADIENT_NAME,
     "min_weight": 0.5,
@@ -398,12 +403,17 @@ def _highway_style_function(style_key: str):
 
 
 def _cima_scaled_style_function(style_key: str, data: Dict[str, Any], metric: str,
-                                min_weight: float = 1.0, max_weight: float = 8.0):
+                                min_weight: float = 1.0, max_weight: float = 8.0,
+                                scale: str = "linear"):
     """Style function that scales line weight/opacity by a numeric property.
 
     Normalizes against the dataset-wide "scaleMax" written into each tier file
     by cima_preprocessing.py, so widths are comparable across tiers; falls
-    back to the layer's own maximum."""
+    back to the layer's own maximum. scale="log" is for metrics with a long
+    tail (e.g. a handful of heavily-shared edges among many barely-merged
+    ones) where a linear scale would make everything but the single largest
+    value look like the minimum width.
+    """
     style = STYLE_MAP.get(style_key, {})
     base_opacity = style.get("opacity", 0.9)
     max_value = data.get("scaleMax")
@@ -414,9 +424,14 @@ def _cima_scaled_style_function(style_key: str, data: Dict[str, Any], metric: st
         ]
         max_value = max(values) if values else 1
 
+    def transform(v):
+        return math.log1p(v) if scale == "log" else v
+
+    max_t = transform(max_value) or 1.0
+
     def fn(feature):
         value = feature.get("properties", {}).get(metric) or 0
-        frac = float(value) / max_value if max_value else 0.0
+        frac = transform(value) / max_t if max_t else 0.0
         return {
             "color": style.get("color", "#444"),
             "fillColor": style.get("fillColor", style.get("color", "#888")),
@@ -450,11 +465,11 @@ def _colormap_css_gradient(colormap: str, n: int = 8) -> str:
     return "linear-gradient(to right, " + ", ".join(stops) + ")"
 
 
-# The heatmap layers (leaflet.heat) use the same blue-green-red scale, passed
-# explicitly as the plugin's `gradient` option (see _add_heatmap_layer) rather
-# than leaflet's own default -- so the legend bar and the actual map rendering
-# are guaranteed to match, not just visually similar.
-HEATMAP_GRADIENT = {0.0: GRADIENT_STOPS[0], 0.5: GRADIENT_STOPS[1], 1.0: GRADIENT_STOPS[2]}
+# The heatmap layers (leaflet.heat) are left on the plugin's own built-in
+# default gradient (no explicit `gradient=` override) so the original CIMA+
+# stop data heatmap's look is unchanged; this CSS approximates that same
+# default for the legend bar, and is also the scale every matplotlib-rendered
+# color layer uses, so all color bars read as the same family of colors.
 HEATMAP_GRADIENT_CSS = _colormap_css_gradient(GRADIENT_NAME)
 
 
@@ -595,6 +610,7 @@ def _speed_scaled_line_style_function(layer_cfg: Dict[str, Any], data: Dict[str,
     colormap = layer_cfg.get("colormap", "viridis")
     min_weight = layer_cfg.get("min_weight", 1.0)
     max_weight = layer_cfg.get("max_weight", 6.0)
+    width_scale = layer_cfg.get("width_scale", "linear")
 
     features = data.get("features", [])
     max_width = data.get("scaleMax") or max(
@@ -608,10 +624,15 @@ def _speed_scaled_line_style_function(layer_cfg: Dict[str, Any], data: Dict[str,
         cmax = max(values) if values else 1.0
     crange = (cmax - cmin) or 1.0
 
+    def transform(v):
+        return math.log1p(v) if width_scale == "log" else v
+
+    max_width_t = transform(max_width) or 1.0
+
     def fn(feature):
         props = feature.get("properties", {})
         width_value = props.get(width_metric) or 0
-        frac = float(width_value) / max_width if max_width else 0.0
+        frac = transform(width_value) / max_width_t if max_width_t else 0.0
         color_value = props.get(color_metric)
         t = (color_value - cmin) / crange if color_value is not None else 0.0
         color = _colormap_hex(colormap, t)
@@ -670,7 +691,6 @@ def _add_heatmap_layer(map_obj: folium.Map, data: Dict[str, Any], name: str,
         radius=12,
         blur=15,
         min_opacity=0.0,
-        gradient=HEATMAP_GRADIENT,
     ).add_to(fg)
     fg.add_to(map_obj)
 
@@ -694,6 +714,7 @@ def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dic
         style_fn = _cima_scaled_style_function(
             style_key, data, layer_cfg.get("metric", "value"),
             layer_cfg.get("min_weight", 1.0), layer_cfg.get("max_weight", 6.0),
+            layer_cfg.get("scale", "linear"),
         )
     elif layer_cfg.get("render") == "line_speed":
         style_fn = _speed_scaled_line_style_function(layer_cfg, data)
@@ -824,7 +845,8 @@ def _add_legend(map_obj: folium.Map, layer_map: Dict[str, Any], geojson_data: Di
     legend_div = (
         "<div id='map-legend' style='position:fixed;bottom:20px;left:20px;z-index:9999;"
         "background:rgba(255,255,255,0.95);padding:10px 12px;border:1px solid #ccc;border-radius:6px;"
-        "box-shadow:0 2px 6px rgba(0,0,0,0.3);max-width:280px;font-family:Arial,sans-serif;'>"
+        "box-shadow:0 2px 6px rgba(0,0,0,0.3);max-width:280px;max-height:75vh;overflow-y:auto;"
+        "font-family:Arial,sans-serif;'>"
         f"{sections_str}"
         "</div>"
     )
