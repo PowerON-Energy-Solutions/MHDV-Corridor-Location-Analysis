@@ -9,7 +9,7 @@ import json
 import math
 import re
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 import folium
 import folium.plugins
@@ -105,6 +105,8 @@ LAYER_CONFIG.append({
     "style_key": "cima_stops",
     "zorder": 10,
     "render": "heatmap",
+    "heatmap_metric": "StopCount",
+    "unit": " stops",
 })
 CIMA_OD_TIERS = 5
 for _tier in range(1, CIMA_OD_TIERS + 1):
@@ -114,6 +116,11 @@ for _tier in range(1, CIMA_OD_TIERS + 1):
         "style_key": "cima_od",
         "zorder": 11,
         "show": _tier == 1,
+        "render": "line_width",
+        "metric": "JourneyCount",
+        "min_weight": 0.8,
+        "max_weight": 7.0,
+        "unit": " journeys",
     })
 
 # Volvo telematics layers (produced by volvo_geojson_export.py). Coverage and
@@ -131,6 +138,7 @@ LAYER_CONFIG.append({
     "metric": "PingCount",
     "min_weight": 0.5,
     "max_weight": 6.0,
+    "unit": " pings",
 })
 LAYER_CONFIG.append({
     "name": "Volvo Average Speed",
@@ -144,6 +152,7 @@ LAYER_CONFIG.append({
     "colormap": "viridis",
     "min_weight": 0.5,
     "max_weight": 6.0,
+    "unit": " km/h",
 })
 LAYER_CONFIG.append({
     "name": "Volvo Stop Density",
@@ -153,6 +162,7 @@ LAYER_CONFIG.append({
     "show": False,
     "render": "heatmap",
     "heatmap_metric": "StopCount",
+    "unit": " stops",
 })
 LAYER_CONFIG.append({
     "name": "Volvo Stop Duration",
@@ -164,6 +174,7 @@ LAYER_CONFIG.append({
     "metric": "MedianStopDurationMin",
     "scale": "linear",
     "colormap": "plasma",
+    "unit": " min",
 })
 LAYER_CONFIG.append({
     "name": "Volvo Regular Ping Locations",
@@ -173,6 +184,7 @@ LAYER_CONFIG.append({
     "show": False,
     "render": "heatmap",
     "heatmap_metric": "RegularVehicles",
+    "unit": " vehicles",
 })
 
 # Style palette keyed by style_key in LAYER_CONFIG.
@@ -415,6 +427,101 @@ def _colormap_hex(colormap: str, t: float) -> str:
     return mpl.colors.to_hex(mpl.colormaps[colormap](t))
 
 
+def _colormap_css_gradient(colormap: str, n: int = 8) -> str:
+    """CSS linear-gradient string sampling a matplotlib colormap left-to-right."""
+    stops = [f"{_colormap_hex(colormap, i / n)} {round(i / n * 100)}%" for i in range(n + 1)]
+    return "linear-gradient(to right, " + ", ".join(stops) + ")"
+
+
+# Leaflet.heat's default gradient (blue -> cyan -> lime -> yellow -> red),
+# approximated as evenly-spaced CSS stops for the legend swatch -- the actual
+# plugin fades in from transparent below its low-intensity threshold, which
+# an always-opaque legend bar can't quite reproduce.
+HEATMAP_GRADIENT_CSS = (
+    "linear-gradient(to right, #0000ff 0%, #00ffff 35%, #00ff00 55%, #ffff00 75%, #ff0000 100%)"
+)
+
+
+def _format_number(value: float) -> str:
+    return str(int(value)) if float(value).is_integer() else f"{value:.1f}"
+
+
+def _color_bar_html(gradient_css: str, vmin: float, vmax: float, unit: str) -> str:
+    return (
+        "<div style='margin:3px 0 4px 18px;'>"
+        f"<div style='width:120px;height:9px;border-radius:2px;border:1px solid #999;"
+        f"background:{gradient_css};'></div>"
+        "<div style='display:flex;justify-content:space-between;width:120px;"
+        "font-size:9px;color:#666;margin-top:1px;'>"
+        f"<span>{_format_number(vmin)}{unit}</span><span>{_format_number(vmax)}{unit}</span>"
+        "</div></div>"
+    )
+
+
+def _width_bar_html(color: str, vmin: float, vmax: float, unit: str) -> str:
+    return (
+        "<div style='margin:3px 0 4px 18px;display:flex;flex-direction:column;gap:3px;'>"
+        "<div style='display:flex;align-items:center;gap:5px;'>"
+        f"<div style='width:36px;height:1px;background:{color};'></div>"
+        f"<span style='font-size:9px;color:#666;'>{_format_number(vmin)}{unit}</span></div>"
+        "<div style='display:flex;align-items:center;gap:5px;'>"
+        f"<div style='width:36px;height:4.5px;background:{color};'></div>"
+        f"<span style='font-size:9px;color:#666;'>{_format_number(vmax)}{unit}</span></div>"
+        "</div>"
+    )
+
+
+def _gradient_bar_html(layer_cfg: Dict[str, Any], data: Dict[str, Any]) -> Optional[str]:
+    """Bottom-left legend bar (color gradient or line-width sample) showing
+    what a gradient-rendered layer's min/max actually represent. Returns None
+    for layers with no real value range (e.g. a heatmap where every point
+    carries the same constant weight) since there's nothing informative to show.
+    """
+    render = layer_cfg.get("render")
+    unit = layer_cfg.get("unit", "")
+    features = data.get("features", [])
+
+    def value_range(metric: str, scale_key: Optional[str] = None):
+        values = [f.get("properties", {}).get(metric) for f in features]
+        values = [v for v in values if v is not None]
+        vmin = min(values) if values else 0.0
+        vmax = data.get(scale_key) if scale_key else None
+        if vmax is None:
+            vmax = max(values) if values else 1.0
+        return vmin, vmax
+
+    if render == "choropleth":
+        vmin, vmax = value_range(layer_cfg.get("metric", "value"), "scaleMax")
+        if vmin == vmax:
+            return None
+        return _color_bar_html(_colormap_css_gradient(layer_cfg.get("colormap", "viridis")), vmin, vmax, unit)
+
+    if render == "line_width":
+        vmin, vmax = value_range(layer_cfg.get("metric", "value"), "scaleMax")
+        if vmin == vmax:
+            return None
+        color = STYLE_MAP.get(layer_cfg["style_key"], {}).get("color", "#444")
+        return _width_bar_html(color, vmin, vmax, unit)
+
+    if render == "line_speed":
+        metric = layer_cfg.get("metric", "AvgSpeedKmh")
+        vmin = data.get("speedMin")
+        vmax = data.get("speedMax")
+        if vmin is None or vmax is None:
+            vmin, vmax = value_range(metric)
+        if vmin == vmax:
+            return None
+        return _color_bar_html(_colormap_css_gradient(layer_cfg.get("colormap", "viridis")), vmin, vmax, unit)
+
+    if render == "heatmap":
+        vmin, vmax = value_range(layer_cfg.get("heatmap_metric", "StopCount"), "scaleMax")
+        if vmin == vmax:
+            return None
+        return _color_bar_html(HEATMAP_GRADIENT_CSS, vmin, vmax, unit)
+
+    return None
+
+
 def _choropleth_style_function(layer_cfg: Dict[str, Any], data: Dict[str, Any]):
     """Style function for flat-colored grid-cell polygons (no interpolation
     between cells -- each feature gets its own solid fill from a matplotlib
@@ -564,8 +671,6 @@ def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dic
         )
     elif layer_cfg.get("render") == "line_speed":
         style_fn = _speed_scaled_line_style_function(layer_cfg, data)
-    elif style_key == "cima_od":
-        style_fn = _cima_scaled_style_function(style_key, data, "JourneyCount", 0.8, 7.0)
     elif is_highway:
         style_fn = _highway_style_function(style_key)
     else:
@@ -634,18 +739,18 @@ def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dic
     return
 
 
-def _add_legend(map_obj: folium.Map):
+def _add_legend(map_obj: folium.Map, layer_map: Dict[str, Any], geojson_data: Dict[str, Any]):
     # Build a grouped legend with section headers.
     legend_html_sections = []
-    
+
     for group_data in LEGEND_ITEMS:
         group_name = group_data["group"]
         items = group_data["items"]
-        
+
         # Add section header
         section_html = f"<div style='font-weight:600;margin-top:10px;margin-bottom:4px;color:#111;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid #ddd;padding-bottom:3px;'>{group_name}</div>"
         legend_html_sections.append(section_html)
-        
+
         # Add items in section
         for item in items:
             shape = item["shape"]
@@ -662,12 +767,22 @@ def _add_legend(map_obj: folium.Map):
                     marker_html = f"<span style='display:inline-block;width:18px;height:3px;background:{color};margin-right:6px;'></span>"
             else:  # square / polygon
                 marker_html = f"<span style='display:inline-block;width:12px;height:12px;background:{color};margin-right:6px;border:1px solid #555;'></span>"
+
+            bar_html = ""
+            cfg = layer_map.get(layer_name)
+            if cfg:
+                data = geojson_data.get(cfg["filename"])
+                if data:
+                    bar_html = _gradient_bar_html(cfg, data) or ""
+
             legend_html_sections.append(
                 f"<div class='legend-entry' data-layer-name='{layer_name}' "
-                f"style='margin:2px 0;display:flex;align-items:center;padding:3px 0;' >"
+                f"style='margin:2px 0;padding:3px 0;' >"
+                f"<div style='display:flex;align-items:center;'>"
                 f"{marker_html}<span style='font-size:11px;color:#333;user-select:none;'>{label}</span></div>"
+                f"{bar_html}</div>"
             )
-    
+
     sections_str = "".join(legend_html_sections)
     
     # Build legend HTML with proper structure
@@ -760,7 +875,7 @@ def build_interactive_map(geojson_dir: Path | None = None, output_path: Path | N
             continue
         _add_geojson_layer(map_obj, data, cfg, f"layer_{cfg['zorder']}")
 
-    _add_legend(map_obj)
+    _add_legend(map_obj, layer_map, geojson_data)
     
     # Add Folium's built-in layer control (will work out of the box with proper styling)
     folium.LayerControl(collapsed=False, position='topright').add_to(map_obj)
