@@ -845,7 +845,7 @@ def _add_legend(map_obj: folium.Map, layer_map: Dict[str, Any], geojson_data: Di
     legend_div = (
         "<div id='map-legend' style='position:fixed;bottom:20px;left:20px;z-index:9999;"
         "background:rgba(255,255,255,0.95);padding:10px 12px;border:1px solid #ccc;border-radius:6px;"
-        "box-shadow:0 2px 6px rgba(0,0,0,0.3);max-width:280px;max-height:75vh;overflow-y:auto;"
+        "box-shadow:0 2px 6px rgba(0,0,0,0.3);max-width:280px;max-height:85vh;overflow-y:auto;"
         "font-family:Arial,sans-serif;'>"
         f"{sections_str}"
         "</div>"
