@@ -135,10 +135,9 @@ for _tier in range(1, CIMA_OD_TIERS + 1):
     })
 
 # Volvo telematics layers (produced by volvo_geojson_export.py). Ping density
-# and average speed render as line edges; stop density and stop duration are
-# flat-colored grid cells ("choropleth": no interpolation between cells, same
-# look as the source hexbin plots); regular-visitor locations render as a
-# leaflet.heat layer, same mechanism/gradient as the CIMA+ stop heatmap above.
+# and average speed render as line edges; stop density, stop duration, and
+# regular-visitor locations are flat-colored grid cells ("choropleth": no
+# interpolation between cells, same look as the source hexbin plots).
 LAYER_CONFIG.append({
     "name": "Volvo Ping Density",
     "filename": "volvo_ping_edges.geojson",
@@ -193,12 +192,14 @@ LAYER_CONFIG.append({
 })
 LAYER_CONFIG.append({
     "name": "Volvo Regular Ping Locations",
-    "filename": "volvo_regular_ping_locations_heat.geojson",
-    "style_key": "volvo_heat",
+    "filename": "volvo_regular_ping_locations.geojson",
+    "style_key": "volvo_regular_locations",
     "zorder": 16,
     "show": False,
-    "render": "heatmap",
-    "heatmap_metric": "RegularVehicles",
+    "render": "choropleth",
+    "metric": "RegularVehicles",
+    "scale": "linear",
+    "colormap": GRADIENT_NAME,
     "unit": " vehicles",
 })
 
@@ -333,7 +334,7 @@ LEGEND_ITEMS: List[Dict[str, Any]] = [
             {"label": "Average Speed (line width = ping count, color = speed)", "color": "#21918c", "shape": "line", "layer_name": "Volvo Average Speed"},
             {"label": "Stop Density (grid)", "color": "#00ffce", "shape": "square", "layer_name": "Volvo Stop Density"},
             {"label": "Median Stop Duration (grid)", "color": "#ffcc00", "shape": "square", "layer_name": "Volvo Stop Duration"},
-            {"label": "Regular Corridor/Stop Locations (>=3 visits/week)", "color": "#e0312c", "shape": "square", "layer_name": "Volvo Regular Ping Locations"},
+            {"label": "Regular Corridor/Stop Locations (grid, >=3 visits/week)", "color": "#ff6400", "shape": "square", "layer_name": "Volvo Regular Ping Locations"},
         ]
     },
     {

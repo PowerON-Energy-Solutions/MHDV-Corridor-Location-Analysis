@@ -2,18 +2,13 @@
 Convert Volvo telematics analysis outputs (source/volvo_telematics_analysis.py)
 into GeoJSON layers for the interactive map (viewer/geojson_viewer.html).
 
-Three rendering styles, matching what's already used for the CIMA+ data (see
+Two rendering styles, matching what's already used for the CIMA+ data (see
 source/interactive_map.py's LAYER_CONFIG for how each file below is wired in):
 
-  - "Choropleth" grid layers (stop density, stop duration): each feature is a
-    flat-colored square grid cell with no interpolation between cells, so the
-    map reads the same way the source hexbin plots do -- a density/value
-    color map, not a smoothed surface.
-  - "Heatmap" point layer (regular-visitor locations): one Point per location
-    with a numeric weight property. The smoothing happens client-side via the
-    same leaflet.heat layer (radius/blur, default gradient) already used for
-    cima_stops_heat.geojson, so it renders with the same "2D interpolated"
-    look, not a pre-baked raster image.
+  - "Choropleth" grid layers (stop density, stop duration, regular-visitor
+    locations): each feature is a flat-colored square grid cell with no
+    interpolation between cells, so the map reads the same way the source
+    hexbin plots do -- a density/value color map, not a smoothed surface.
   - "Line edge" layer (ping density, average speed): consecutive-in-time pings
     from the same vehicle are each snapped either to the nearest vertex of the
     existing freight-corridor/highway network (see load_road_vertices) if
@@ -48,6 +43,7 @@ from volvo_telematics_analysis import (
     KM_PER_LAT_DEG,
     MIN_VISITS_PER_WEEK,
     MAX_STOP_DURATION_FOR_PLOT_MIN,
+    STOP_LOCATION_GRID_KM,
     load_telematics_data,
     load_gta_boundary,
     filter_to_gta,
@@ -387,29 +383,42 @@ def export_stop_duration_choropleth(
     return _write_geojson(collection, out_path)
 
 
-# ---------- Heatmap point layer (regular visitors) ----------
+# ---------- Choropleth grid layer (regular visitors) ----------
 
-def export_regular_locations_heat(
+def export_regular_locations_choropleth(
     locations: pd.DataFrame,
-    out_path: Path = GEOJSON_DIR / "volvo_regular_ping_locations_heat.geojson",
+    out_path: Path = GEOJSON_DIR / "volvo_regular_ping_locations.geojson",
+    grid_km: float = STOP_LOCATION_GRID_KM,
     min_visits_per_week: float = MIN_VISITS_PER_WEEK,
 ) -> Optional[Path]:
-    """One point per location with >= 1 regularly-visiting vehicle, weighted by
+    """Grid cell per location with >= 1 regularly-visiting vehicle, weighted by
     REGULAR_VEHICLES kept as an absolute count -- NOT normalized to a 0-1
     relative scale -- so the map layer reflects the real number of vehicles.
+    Flat-colored cells (no smoothing), at the same grid_km resolution the
+    locations were clustered at (LOCATION_CLUSTER already is a lat/lon grid
+    index, so this reconstructs each location's own cell exactly rather than
+    re-binning at a different resolution).
     """
     qualifying = locations[locations["REGULAR_VEHICLES"] >= 1]
     if qualifying.empty:
         print(f"[Regular Locations] No locations with >= 1 vehicle at >= "
               f"{min_visits_per_week:.0f}/week; skipping {out_path.name}")
         return None
+
+    lat_idx = qualifying["LOCATION_CLUSTER"].str.split("_").str[0].astype(int)
+    lon_idx = qualifying["LOCATION_CLUSTER"].str.split("_").str[1].astype(int)
+    lat_mid = qualifying["LATITUDE"].mean()
+    km_per_lon_deg = KM_PER_LAT_DEG * np.cos(np.radians(lat_mid))
+    lat_cell_deg = grid_km / KM_PER_LAT_DEG
+    lon_cell_deg = grid_km / km_per_lon_deg
+
     features = [
         {
             "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [_round(row.LONGITUDE), _round(row.LATITUDE)]},
+            "geometry": _grid_cell_polygon(la, lo, lat_cell_deg, lon_cell_deg),
             "properties": {"RegularVehicles": int(row.REGULAR_VEHICLES)},
         }
-        for row in qualifying.itertuples()
+        for la, lo, row in zip(lat_idx, lon_idx, qualifying.itertuples())
     ]
     collection = {
         "type": "FeatureCollection",
@@ -438,7 +447,7 @@ def main() -> None:
 
     ping_visits = extract_location_visits(df)
     ping_locations = find_regular_locations(ping_visits, vehicle_span_weeks, label="all pings")
-    export_regular_locations_heat(ping_locations)
+    export_regular_locations_choropleth(ping_locations)
 
 
 if __name__ == "__main__":
