@@ -5,15 +5,15 @@ into GeoJSON layers for the interactive map (viewer/geojson_viewer.html).
 Three rendering styles, matching what's already used for the CIMA+ data (see
 source/interactive_map.py's LAYER_CONFIG for how each file below is wired in):
 
-  - "Choropleth" grid layer (stop duration): each feature is a flat-colored
-    square grid cell with no interpolation between cells, so the map reads the
-    same way the source hexbin plot does -- a density/value color map, not a
-    smoothed surface.
-  - "Heatmap" point layers (stop density, regular-visitor locations): one
-    Point per stop/location with a numeric weight property. The smoothing
-    happens client-side via the same leaflet.heat layer (radius/blur, default
-    gradient) already used for cima_stops_heat.geojson, so these render with
-    the same "2D interpolated" look, not a pre-baked raster image.
+  - "Choropleth" grid layers (stop density, stop duration): each feature is a
+    flat-colored square grid cell with no interpolation between cells, so the
+    map reads the same way the source hexbin plots do -- a density/value
+    color map, not a smoothed surface.
+  - "Heatmap" point layer (regular-visitor locations): one Point per location
+    with a numeric weight property. The smoothing happens client-side via the
+    same leaflet.heat layer (radius/blur, default gradient) already used for
+    cima_stops_heat.geojson, so it renders with the same "2D interpolated"
+    look, not a pre-baked raster image.
   - "Line edge" layer (ping density, average speed): consecutive-in-time pings
     from the same vehicle are each snapped either to the nearest vertex of the
     existing freight-corridor/highway network (see load_road_vertices) if
@@ -309,24 +309,37 @@ def export_ping_edges(
     return _write_geojson(collection, out_path)
 
 
-# ---------- Heatmap point layers (stop density, regular visitors) ----------
+# ---------- Choropleth grid layers (stop density, stop duration) ----------
 
-def export_stop_density_heat(
+def export_stop_density_choropleth(
     stops: pd.DataFrame,
-    out_path: Path = GEOJSON_DIR / "volvo_stop_density_heat.geojson",
+    out_path: Path = GEOJSON_DIR / "volvo_stop_density.geojson",
+    grid_km: float = CHOROPLETH_GRID_KM,
 ) -> Path:
-    """One point per stop, weight 1 each -- leaflet.heat does the KDE-style
-    smoothing client-side, the same mechanism as cima_stops_heat.geojson.
+    """Stop count per grid cell -- ping/grid-based like stop duration and the
+    original hexbin plot (flat-colored cells, no smoothing), rather than a
+    smoothed leaflet.heat point layer.
     """
+    lat_idx, lon_idx, lat_cell_deg, lon_cell_deg = _grid_indices(
+        stops["LATITUDE"], stops["LONGITUDE"], grid_km
+    )
+    counts = (
+        pd.DataFrame({"lat_idx": lat_idx, "lon_idx": lon_idx})
+        .value_counts().rename("StopCount").reset_index()
+    )
     features = [
         {
             "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [_round(lon), _round(lat)]},
-            "properties": {"StopCount": 1},
+            "geometry": _grid_cell_polygon(row.lat_idx, row.lon_idx, lat_cell_deg, lon_cell_deg),
+            "properties": {"StopCount": int(row.StopCount)},
         }
-        for lon, lat in zip(stops["LONGITUDE"], stops["LATITUDE"])
+        for row in counts.itertuples()
     ]
-    collection = {"type": "FeatureCollection", "scaleMax": 1, "features": features}
+    collection = {
+        "type": "FeatureCollection",
+        "scaleMax": int(counts["StopCount"].max()),
+        "features": features,
+    }
     return _write_geojson(collection, out_path)
 
 
@@ -336,9 +349,9 @@ def export_stop_duration_choropleth(
     grid_km: float = CHOROPLETH_GRID_KM,
     max_duration_min: float = MAX_STOP_DURATION_FOR_PLOT_MIN,
 ) -> Path:
-    """Median stop duration per grid cell -- ping/grid-based like coverage and
-    speed (flat-colored cells, no smoothing), matching plot_stop_duration_heatmap's
-    hexbin exactly: median per cell, multi-day outliers excluded from the scale.
+    """Median stop duration per grid cell -- flat-colored cells, no smoothing,
+    matching plot_stop_duration_heatmap's hexbin exactly: median per cell,
+    multi-day outliers excluded from the scale.
     """
     plotted = stops[stops["STOP_DURATION_MIN"] <= max_duration_min]
     excluded = len(stops) - len(plotted)
@@ -373,6 +386,8 @@ def export_stop_duration_choropleth(
     }
     return _write_geojson(collection, out_path)
 
+
+# ---------- Heatmap point layer (regular visitors) ----------
 
 def export_regular_locations_heat(
     locations: pd.DataFrame,
@@ -418,7 +433,7 @@ def main() -> None:
     export_ping_edges(edges)
 
     stops = extract_stops(df)
-    export_stop_density_heat(stops)
+    export_stop_density_choropleth(stops)
     export_stop_duration_choropleth(stops)
 
     ping_visits = extract_location_visits(df)
