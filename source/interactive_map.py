@@ -107,18 +107,36 @@ LAYER_CONFIG = [
     },
 ]
 
-# CIMA+/Geotab layers (produced by cima_preprocessing.py). Stop data renders
-# as a StopCount-weighted heatmap; OD data comes in rank tiers (tier 1 =
-# highest volume), only tier 1 shown initially.
-LAYER_CONFIG.append({
-    "name": "CIMA+ stop data",
-    "filename": "cima_stops_heat.geojson",
-    "style_key": "cima_stops",
-    "zorder": 10,
-    "render": "heatmap",
-    "heatmap_metric": "StopCount",
-    "unit": " stops",
-})
+# CIMA+/Geotab layers (produced by cima_preprocessing.py). OD data comes in
+# rank tiers (tier 1 = highest volume), only tier 1 shown initially.
+
+# Stop data can render either as a flat-colored 2D-binned grid ("choropleth",
+# cima_stops_grid.geojson) or a smoothed leaflet.heat layer ("heatmap",
+# cima_stops_heat.geojson) -- both files are already built by
+# cima_preprocessing.py, so switching is just flipping this one constant.
+CIMA_STOPS_RENDER = "choropleth"
+if CIMA_STOPS_RENDER == "heatmap":
+    LAYER_CONFIG.append({
+        "name": "CIMA+ stop data",
+        "filename": "cima_stops_heat.geojson",
+        "style_key": "cima_stops",
+        "zorder": 10,
+        "render": "heatmap",
+        "heatmap_metric": "StopCount",
+        "unit": " stops",
+    })
+else:
+    LAYER_CONFIG.append({
+        "name": "CIMA+ stop data",
+        "filename": "cima_stops_grid.geojson",
+        "style_key": "cima_stops",
+        "zorder": 10,
+        "render": "choropleth",
+        "metric": "StopCount",
+        "scale": "log",
+        "colormap": GRADIENT_NAME,
+        "unit": " stops",
+    })
 CIMA_OD_TIERS = 5
 for _tier in range(1, CIMA_OD_TIERS + 1):
     LAYER_CONFIG.append({
@@ -323,7 +341,12 @@ LEGEND_ITEMS: List[Dict[str, Any]] = [
     {
         "group": "CIMA+ / Geotab Telematics (Toronto, 2024-09-01 to 09-08)",
         "items": [
-            {"label": "Stop density heatmap (weighted by stop count)", "color": "#e0312c", "shape": "square", "layer_name": "CIMA+ stop data"},
+            {
+                "label": "Stop density (grid, weighted by stop count)" if CIMA_STOPS_RENDER == "choropleth"
+                         else "Stop density heatmap (weighted by stop count)",
+                "color": "#66ff00" if CIMA_STOPS_RENDER == "choropleth" else "#e0312c",
+                "shape": "square", "layer_name": "CIMA+ stop data",
+            },
             {"label": "Origin-Destination flows, tiers 1-5 (width = journeys)", "color": STYLE_MAP["cima_od"]["color"], "shape": "line", "layer_name": "CIMA+ Origin Destination data (1)"},
         ]
     },
