@@ -112,15 +112,25 @@ def export_feeder_capacity(
     gdf["geometry"] = _simplify_and_round(gdf.geometry, simplify_deg)
 
     features = []
+    n_non_positive = 0
     for row in gdf.itertuples():
         props = {name: getattr(row, name, None) for name in CAPACITY_PROPERTIES}
         if props["capacity"] is not None:
-            props["capacity"] = round(float(props["capacity"]), 1)
+            capacity = float(props["capacity"])
+            # Zero/negative capacity isn't a meaningful available-capacity
+            # value (0 isn't distinguishable from "not reported", and
+            # negative just means "already over-committed" rather than
+            # anything usable) -- null it out so it renders as "no data"
+            # rather than on the diverging color scale.
+            props["capacity"] = round(capacity, 1) if capacity > 0 else None
+            n_non_positive += capacity <= 0
         features.append({
             "type": "Feature",
             "geometry": json.loads(shapely.to_geojson(row.geometry)),
             "properties": props,
         })
+    if n_non_positive:
+        print(f"[Capacity] Nulled out {n_non_positive} zero/negative capacity values")
 
     capacities = [f["properties"]["capacity"] for f in features if f["properties"]["capacity"] is not None]
     collection = {
