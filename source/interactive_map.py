@@ -246,6 +246,25 @@ LAYER_CONFIG.append({
     "show": False,
 })
 
+# Hydro One generator connection capacity (produced by
+# honi_geojson_export.py). Marker diameter is literally proportional to
+# CapacityMW (see _point_radius_function) -- stations with no quantifiable
+# capacity (e.g. "TC" -- transmission-constrained) still render at the
+# min-radius floor rather than being dropped, since their location is still
+# useful context.
+LAYER_CONFIG.append({
+    "name": "HONI Generation Capacity",
+    "filename": "honi_generation_capacity.geojson",
+    "style_key": "honi_generation_capacity",
+    "zorder": 19,
+    "show": False,
+    "render": "point_radius",
+    "metric": "CapacityMW",
+    "min_radius": 3.0,
+    "max_radius": 26.0,
+    "unit": " MW",
+})
+
 # Style palette keyed by style_key in LAYER_CONFIG.
 STYLE_MAP: Dict[str, Dict[str, Any]] = {
     "ontario_boundary": {
@@ -351,6 +370,11 @@ STYLE_MAP: Dict[str, Dict[str, Any]] = {
         "fill": False,
         "dashArray": "6, 6",
     },
+    "honi_generation_capacity": {
+        "color": "#8a5a00",
+        "fillColor": "#f2a900",
+        "fillOpacity": 0.75,
+    },
 }
 
 # Legend items organized by section.
@@ -398,6 +422,12 @@ LEGEND_ITEMS: List[Dict[str, Any]] = [
         "items": [
             {"label": "Feeder Available Capacity (MW)", "color": "#84ca66", "shape": "square", "layer_name": "OEB Feeder Available Capacity"},
             {"label": "LDC (Utility) Service-Area Boundaries", "color": "#00838f", "shape": "line", "dash": True, "layer_name": "OEB LDC Boundaries"},
+        ]
+    },
+    {
+        "group": "Generation Capacity (Hydro One)",
+        "items": [
+            {"label": "Station Capacity (marker diameter = capacity, geocoded place names)", "color": STYLE_MAP["honi_generation_capacity"]["fillColor"], "shape": "circle", "layer_name": "HONI Generation Capacity"},
         ]
     },
     {
@@ -730,6 +760,35 @@ def _speed_scaled_line_style_function(layer_cfg: Dict[str, Any], data: Dict[str,
     return fn
 
 
+def _point_radius_function(layer_cfg: Dict[str, Any], data: Dict[str, Any]):
+    """Radius function for point markers whose diameter is literally
+    proportional to a numeric property (not a min/max-normalized fraction
+    like the line-width layers use) -- the largest value in the dataset maps
+    to max_radius, and every other value scales linearly from that, so a
+    station with half the capacity of another really does draw at half the
+    diameter. min_radius is just a visibility floor for zero/missing values,
+    not a rescaling of the whole range.
+    """
+    metric = layer_cfg.get("metric", "value")
+    min_radius = layer_cfg.get("min_radius", 3.0)
+    max_radius = layer_cfg.get("max_radius", 26.0)
+
+    features = data.get("features", [])
+    values = [f.get("properties", {}).get(metric) for f in features]
+    values = [v for v in values if v is not None]
+    vmax = data.get("scaleMax")
+    if vmax is None:
+        vmax = max(values) if values else 1.0
+    scale_factor = (max_radius / vmax) if vmax else 0.0
+
+    def radius_of(value):
+        if value is None:
+            return min_radius
+        return max(min_radius, value * scale_factor)
+
+    return radius_of
+
+
 def _load_geojson(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
@@ -814,17 +873,22 @@ def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dic
     if is_point_geom:
         fg = folium.FeatureGroup(name=name, show=show)
         style = STYLE_MAP.get(style_key, {})
+        radius_fn = None
+        if layer_cfg.get("render") == "point_radius":
+            radius_fn = _point_radius_function(layer_cfg, data)
+            metric = layer_cfg.get("metric", "value")
         for feat in features:
             geom = feat.get("geometry", {})
             props = feat.get("properties", {})
             gtype = geom.get("type")
             coords = geom.get("coordinates", [])
+            radius = radius_fn(props.get(metric)) if radius_fn else style.get("radius", 6)
 
-            def add_point(coord_pair):
+            def add_point(coord_pair, radius=radius):
                 lat, lon = coord_pair[1], coord_pair[0]
                 folium.CircleMarker(
                     location=[lat, lon],
-                    radius=style.get("radius", 6),
+                    radius=radius,
                     color="#000000",
                     fill=True,
                     fill_color=style.get("fillColor", style.get("color", "#555")),
