@@ -13,6 +13,11 @@ Inputs (defaults point at the raw exports in Downloads):
 Outputs:
   - active geojsons/cima_stops_heat.geojson  All ~64k segments reduced to
     their midpoint with StopCount, for heatmap rendering.
+  - active geojsons/cima_stops_grid.geojson  StopCount summed per grid cell,
+    built directly from cima_stops_heat.geojson (not the raw exports) -- a
+    flat-colored 2D-binned alternative to the smoothed heatmap. See
+    CIMA_STOPS_RENDER in interactive_map.py to switch the map between this
+    and the heatmap.
   - active geojsons/cima_od_<i>.geojson      Top 50,000 zone pairs by
     JourneyCount in rank tiers of 10,000 (tier 1 = busiest), drawn as
     centroid-to-centroid LineStrings; self-pairs excluded. (The full matrix
@@ -29,6 +34,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+import numpy as np
 import pandas as pd
 
 DOWNLOADS = Path.home() / "Downloads"
@@ -40,6 +46,8 @@ GEOJSON_DIR = Path(__file__).parent.parent / "active geojsons"
 COORD_DECIMALS = 6
 OD_TOP_N = 50_000
 OD_TIER_SIZE = 10_000
+KM_PER_LAT_DEG = 111.32
+CIMA_STOPS_GRID_KM = 0.5
 
 # ZoneIds are 19-digit integers; always read them as strings so they survive
 # pandas dtype inference (float64 promotion would corrupt join keys).
@@ -181,6 +189,73 @@ def build_stops_heatmap_geojson(
     return out_path
 
 
+def _grid_cell_polygon(lat_idx: int, lon_idx: int, lat_cell_deg: float, lon_cell_deg: float) -> dict:
+    lon_min = round((lon_idx - 0.5) * lon_cell_deg, COORD_DECIMALS)
+    lon_max = round((lon_idx + 0.5) * lon_cell_deg, COORD_DECIMALS)
+    lat_min = round((lat_idx - 0.5) * lat_cell_deg, COORD_DECIMALS)
+    lat_max = round((lat_idx + 0.5) * lat_cell_deg, COORD_DECIMALS)
+    return {
+        "type": "Polygon",
+        "coordinates": [[
+            [lon_min, lat_min], [lon_max, lat_min],
+            [lon_max, lat_max], [lon_min, lat_max], [lon_min, lat_min],
+        ]],
+    }
+
+
+def build_stops_grid_geojson(
+    heat_geojson: Path = GEOJSON_DIR / "cima_stops_heat.geojson",
+    out_path: Path = GEOJSON_DIR / "cima_stops_grid.geojson",
+    grid_km: float = CIMA_STOPS_GRID_KM,
+) -> Path:
+    """StopCount summed per grid_km grid cell -- a flat-colored, 2D-binned
+    alternative to the StopCount-weighted heatmap (build_stops_heatmap_geojson).
+
+    Built directly from that heatmap's own point output rather than the raw
+    stop-analytics/zone exports, so it doesn't need those to be present. See
+    CIMA_STOPS_RENDER in interactive_map.py to switch the map between this
+    grid and the smoothed heatmap.
+    """
+    with heat_geojson.open("r", encoding="utf-8") as f:
+        heat = json.load(f)
+    features_in = heat["features"]
+
+    lons = np.array([f["geometry"]["coordinates"][0] for f in features_in])
+    lats = np.array([f["geometry"]["coordinates"][1] for f in features_in])
+    counts = np.array([f["properties"]["StopCount"] for f in features_in])
+
+    lat_mid = lats.mean()
+    km_per_lon_deg = KM_PER_LAT_DEG * np.cos(np.radians(lat_mid))
+    lat_cell_deg = grid_km / KM_PER_LAT_DEG
+    lon_cell_deg = grid_km / km_per_lon_deg
+    lat_idx = np.round(lats / lat_cell_deg).astype(int)
+    lon_idx = np.round(lons / lon_cell_deg).astype(int)
+
+    grouped = (
+        pd.DataFrame({"lat_idx": lat_idx, "lon_idx": lon_idx, "StopCount": counts})
+        .groupby(["lat_idx", "lon_idx"])["StopCount"].sum().reset_index()
+    )
+    features = [
+        {
+            "type": "Feature",
+            "geometry": _grid_cell_polygon(row.lat_idx, row.lon_idx, lat_cell_deg, lon_cell_deg),
+            "properties": {"StopCount": int(row.StopCount)},
+        }
+        for row in grouped.itertuples()
+    ]
+    collection = {
+        "type": "FeatureCollection",
+        "scaleMax": int(grouped["StopCount"].max()),
+        "features": features,
+    }
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8") as f:
+        json.dump(collection, f, separators=(",", ":"))
+    print(f"[Write] {len(features)} features -> {out_path} "
+          f"({out_path.stat().st_size / 1024:.0f} KB)")
+    return out_path
+
+
 def build_zone_centroid_lookup(
     zones_dir: Path = DEFAULT_ZONES_DIR,
 ) -> Dict[str, Tuple[float, float]]:
@@ -281,6 +356,7 @@ def build_od_geojsons(
 
 def main():
     build_stops_heatmap_geojson()
+    build_stops_grid_geojson()
     build_od_geojsons()
 
 
