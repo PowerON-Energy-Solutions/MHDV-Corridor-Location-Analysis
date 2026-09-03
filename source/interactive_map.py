@@ -221,6 +221,50 @@ LAYER_CONFIG.append({
     "unit": " vehicles",
 })
 
+# OEB (Ontario Energy Board) grid-capacity layers (produced by
+# oeb_geojson_export.py). Feeder capacity is a choropleth over real feeder
+# service-area polygons (not a synthetic grid) colored on a diverging scale
+# centered at 0 MW, since negative/positive capacity have opposite meanings,
+# not just different magnitudes; LDC boundaries are a plain reference outline.
+LAYER_CONFIG.append({
+    "name": "OEB Feeder Available Capacity",
+    "filename": "oeb_feeder_capacity.geojson",
+    "style_key": "oeb_feeder_capacity",
+    "zorder": 17,
+    "show": False,
+    "render": "choropleth",
+    "metric": "capacity",
+    "scale": "diverging",
+    "colormap": "RdYlGn",
+    "unit": " MW",
+})
+LAYER_CONFIG.append({
+    "name": "OEB LDC Boundaries",
+    "filename": "oeb_ldc_boundaries.geojson",
+    "style_key": "oeb_ldc_boundaries",
+    "zorder": 18,
+    "show": False,
+})
+
+# Hydro One generator connection capacity (produced by
+# honi_geojson_export.py). Marker diameter is literally proportional to
+# CapacityMW (see _point_radius_function) -- stations with no quantifiable
+# capacity (e.g. "TC" -- transmission-constrained) still render at the
+# min-radius floor rather than being dropped, since their location is still
+# useful context.
+LAYER_CONFIG.append({
+    "name": "HONI Generation Capacity",
+    "filename": "honi_generation_capacity.geojson",
+    "style_key": "honi_generation_capacity",
+    "zorder": 19,
+    "show": False,
+    "render": "point_radius",
+    "metric": "CapacityMW",
+    "min_radius": 3.0,
+    "max_radius": 26.0,
+    "unit": " MW",
+})
+
 # Style palette keyed by style_key in LAYER_CONFIG.
 STYLE_MAP: Dict[str, Dict[str, Any]] = {
     "ontario_boundary": {
@@ -318,6 +362,19 @@ STYLE_MAP: Dict[str, Dict[str, Any]] = {
         "color": "#1f78b4",
         "opacity": 0.85,
     },
+    "oeb_ldc_boundaries": {
+        "color": "#00838f",
+        "weight": 2.0,
+        "fillOpacity": 0.0,
+        "opacity": 1.0,
+        "fill": False,
+        "dashArray": "6, 6",
+    },
+    "honi_generation_capacity": {
+        "color": "#8a5a00",
+        "fillColor": "#f2a900",
+        "fillOpacity": 0.75,
+    },
 }
 
 # Legend items organized by section.
@@ -358,6 +415,19 @@ LEGEND_ITEMS: List[Dict[str, Any]] = [
             {"label": "Stop Density (grid)", "color": "#00ffce", "shape": "square", "layer_name": "Volvo Stop Density"},
             {"label": "Median Stop Duration (grid)", "color": "#ffcc00", "shape": "square", "layer_name": "Volvo Stop Duration"},
             {"label": "Regular Corridor/Stop Locations (grid, >=3 visits/week)", "color": "#ff6400", "shape": "square", "layer_name": "Volvo Regular Ping Locations"},
+        ]
+    },
+    {
+        "group": "Grid Capacity (OEB)",
+        "items": [
+            {"label": "Feeder Available Capacity (MW)", "color": "#84ca66", "shape": "square", "layer_name": "OEB Feeder Available Capacity"},
+            {"label": "LDC (Utility) Service-Area Boundaries", "color": "#00838f", "shape": "line", "dash": True, "layer_name": "OEB LDC Boundaries"},
+        ]
+    },
+    {
+        "group": "Generation Capacity (Hydro One)",
+        "items": [
+            {"label": "Station Capacity (marker diameter = capacity, geocoded place names)", "color": STYLE_MAP["honi_generation_capacity"]["fillColor"], "shape": "circle", "layer_name": "HONI Generation Capacity"},
         ]
     },
     {
@@ -485,9 +555,19 @@ def _colormap_hex(colormap: str, t: float) -> str:
     return mpl.colors.to_hex(mpl.colormaps[colormap](t))
 
 
-def _colormap_css_gradient(colormap: str, n: int = 8) -> str:
-    """CSS linear-gradient string sampling a matplotlib colormap left-to-right."""
-    stops = [f"{_colormap_hex(colormap, i / n)} {round(i / n * 100)}%" for i in range(n + 1)]
+def _colormap_css_gradient(colormap: str, n: int = 8, frac_min: float = 0.0, frac_max: float = 1.0) -> str:
+    """CSS linear-gradient string sampling a matplotlib colormap left-to-right.
+
+    frac_min/frac_max let a caller show only the colormap sub-range a
+    "diverging" choropleth's actual min/max reach (see _choropleth_style_function)
+    -- otherwise the bar would show full saturation at both ends even where
+    the real data never gets there (e.g. capacity's negative tail being much
+    smaller in magnitude than its positive one).
+    """
+    stops = [
+        f"{_colormap_hex(colormap, frac_min + (frac_max - frac_min) * i / n)} {round(i / n * 100)}%"
+        for i in range(n + 1)
+    ]
     return "linear-gradient(to right, " + ", ".join(stops) + ")"
 
 
@@ -529,20 +609,30 @@ def _gradient_bar_html(layer_cfg: Dict[str, Any], data: Dict[str, Any]) -> Optio
     unit = layer_cfg.get("unit", "")
     features = data.get("features", [])
 
-    def value_range(metric: str, scale_key: Optional[str] = None):
+    def value_range(metric: str, max_key: Optional[str] = None, min_key: Optional[str] = None):
         values = [f.get("properties", {}).get(metric) for f in features]
         values = [v for v in values if v is not None]
-        vmin = min(values) if values else 0.0
-        vmax = data.get(scale_key) if scale_key else None
+        vmin = data.get(min_key) if min_key else None
+        if vmin is None:
+            vmin = min(values) if values else 0.0
+        vmax = data.get(max_key) if max_key else None
         if vmax is None:
             vmax = max(values) if values else 1.0
         return vmin, vmax
 
     if render == "choropleth":
-        vmin, vmax = value_range(layer_cfg.get("metric", "value"), "scaleMax")
+        vmin, vmax = value_range(layer_cfg.get("metric", "value"), "scaleMax", "scaleMin")
         if vmin == vmax:
             return None
-        return _color_bar_html(_colormap_css_gradient(layer_cfg.get("colormap", "viridis")), vmin, vmax, unit)
+        colormap = layer_cfg.get("colormap", "viridis")
+        if layer_cfg.get("scale") == "diverging":
+            vabs = max(abs(vmin), abs(vmax)) or 1.0
+            gradient_css = _colormap_css_gradient(
+                colormap, frac_min=0.5 + 0.5 * (vmin / vabs), frac_max=0.5 + 0.5 * (vmax / vabs),
+            )
+        else:
+            gradient_css = _colormap_css_gradient(colormap)
+        return _color_bar_html(gradient_css, vmin, vmax, unit)
 
     if render == "line_speed":
         metric = layer_cfg.get("metric", "AvgSpeedKmh")
@@ -564,13 +654,20 @@ def _gradient_bar_html(layer_cfg: Dict[str, Any], data: Dict[str, Any]) -> Optio
 
 
 def _choropleth_style_function(layer_cfg: Dict[str, Any], data: Dict[str, Any]):
-    """Style function for flat-colored grid-cell polygons (no interpolation
-    between cells -- each feature gets its own solid fill from a matplotlib
-    colormap, sampled directly from that cell's value, log- or linear-scaled).
+    """Style function for flat-colored polygons -- grid cells or real
+    boundaries alike (no interpolation between features -- each one gets its
+    own solid fill from a matplotlib colormap, sampled directly from that
+    feature's value). scale is "linear", "log", or "diverging" (normalized
+    symmetrically around zero, so a value of 0 always lands at the colormap's
+    midpoint regardless of how skewed the data's min/max are -- for metrics
+    like available capacity where positive/negative have opposite meanings,
+    not just different magnitudes). Features with a missing value render in
+    a fixed "no data" gray rather than silently landing at one end of the scale.
     """
     metric = layer_cfg.get("metric", "value")
     scale = layer_cfg.get("scale", "linear")
     colormap = layer_cfg.get("colormap", "viridis")
+    no_data_color = layer_cfg.get("no_data_color", "#999999")
 
     features = data.get("features", [])
     values = [f.get("properties", {}).get(metric) for f in features]
@@ -578,20 +675,34 @@ def _choropleth_style_function(layer_cfg: Dict[str, Any], data: Dict[str, Any]):
     vmax = data.get("scaleMax")
     if vmax is None:
         vmax = max(values) if values else 1.0
-    vmin = min(values) if values else 0.0
+    vmin = data.get("scaleMin")
+    if vmin is None:
+        vmin = min(values) if values else 0.0
 
-    def transform(v):
-        return math.log1p(max(v, 0)) if scale == "log" else v
+    if scale == "diverging":
+        vabs = max(abs(vmin), abs(vmax)) or 1.0
 
-    tmin, tmax = transform(vmin), transform(vmax)
-    trange = (tmax - tmin) or 1.0
+        def frac_of(value):
+            return 0.5 + 0.5 * (value / vabs)
+    else:
+        def transform(v):
+            return math.log1p(max(v, 0)) if scale == "log" else v
+
+        tmin, tmax = transform(vmin), transform(vmax)
+        trange = (tmax - tmin) or 1.0
+
+        def frac_of(value):
+            return (transform(value) - tmin) / trange
 
     def fn(feature):
         value = feature.get("properties", {}).get(metric)
-        frac = (transform(value) - tmin) / trange if value is not None else 0.0
+        if value is None:
+            fill = no_data_color
+        else:
+            fill = _colormap_hex(colormap, frac_of(value))
         return {
             "color": "#333333",
-            "fillColor": _colormap_hex(colormap, frac),
+            "fillColor": fill,
             "fillOpacity": 0.8,
             "opacity": 0.15,
             "weight": 0.3,
@@ -647,6 +758,35 @@ def _speed_scaled_line_style_function(layer_cfg: Dict[str, Any], data: Dict[str,
         }
 
     return fn
+
+
+def _point_radius_function(layer_cfg: Dict[str, Any], data: Dict[str, Any]):
+    """Radius function for point markers whose diameter is literally
+    proportional to a numeric property (not a min/max-normalized fraction
+    like the line-width layers use) -- the largest value in the dataset maps
+    to max_radius, and every other value scales linearly from that, so a
+    station with half the capacity of another really does draw at half the
+    diameter. min_radius is just a visibility floor for zero/missing values,
+    not a rescaling of the whole range.
+    """
+    metric = layer_cfg.get("metric", "value")
+    min_radius = layer_cfg.get("min_radius", 3.0)
+    max_radius = layer_cfg.get("max_radius", 26.0)
+
+    features = data.get("features", [])
+    values = [f.get("properties", {}).get(metric) for f in features]
+    values = [v for v in values if v is not None]
+    vmax = data.get("scaleMax")
+    if vmax is None:
+        vmax = max(values) if values else 1.0
+    scale_factor = (max_radius / vmax) if vmax else 0.0
+
+    def radius_of(value):
+        if value is None:
+            return min_radius
+        return max(min_radius, value * scale_factor)
+
+    return radius_of
 
 
 def _load_geojson(path: Path) -> Dict[str, Any]:
@@ -733,17 +873,22 @@ def _add_geojson_layer(map_obj: folium.Map, data: Dict[str, Any], layer_cfg: Dic
     if is_point_geom:
         fg = folium.FeatureGroup(name=name, show=show)
         style = STYLE_MAP.get(style_key, {})
+        radius_fn = None
+        if layer_cfg.get("render") == "point_radius":
+            radius_fn = _point_radius_function(layer_cfg, data)
+            metric = layer_cfg.get("metric", "value")
         for feat in features:
             geom = feat.get("geometry", {})
             props = feat.get("properties", {})
             gtype = geom.get("type")
             coords = geom.get("coordinates", [])
+            radius = radius_fn(props.get(metric)) if radius_fn else style.get("radius", 6)
 
-            def add_point(coord_pair):
+            def add_point(coord_pair, radius=radius):
                 lat, lon = coord_pair[1], coord_pair[0]
                 folium.CircleMarker(
                     location=[lat, lon],
-                    radius=style.get("radius", 6),
+                    radius=radius,
                     color="#000000",
                     fill=True,
                     fill_color=style.get("fillColor", style.get("color", "#555")),
